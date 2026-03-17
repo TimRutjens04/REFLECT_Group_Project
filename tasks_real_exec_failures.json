@@ -1,0 +1,231 @@
+{
+    "Task 1": {
+        "general_folder_name": "putAppleBowl1",
+        "failure_type": "execution",
+        "failure_subtype": "environment_blocked",
+        "failure_analysis": "Plan is correct (pick apple → put in bowl). Robot executed the action but the bowl was upside down — an environmental constraint the robot failed to perceive and adapt to.",
+        "gt_failure_reason": "Apple is placed on top of the bowl instead of inside the bowl due to the bowl being upside down."
+    },
+    "Task 2": {
+        "general_folder_name": "putAppleBowl2",
+        "failure_type": "execution",
+        "failure_subtype": "drop",
+        "failure_analysis": "Plan is correct. Apple dropped from gripper during execution.",
+        "gt_failure_reason": "Apple was dropped from robot gripper when executing the action 'put apple in bowl'."
+    },
+    "Task 3": {
+        "general_folder_name": "putAppleBowl3",
+        "failure_type": "execution",
+        "failure_subtype": "environment_blocked",
+        "failure_analysis": "Plan is correct. A knife on top of the bowl physically blocked placement. The robot failed to perceive and clear the obstruction.",
+        "gt_failure_reason": "The robot cannot put the apple inside the bowl because there's a knife on top of the bowl, blocking the space."
+    },
+    "Task 4": {
+        "general_folder_name": "boilWater1",
+        "failure_type": "planning",
+        "failure_subtype": "wrong_object_in_plan",
+        "failure_analysis": "The actions list explicitly includes 'Pick up bowl' and 'Put bowl on stove burner' instead of using the pot again. The plan itself specifies the wrong object.",
+        "gt_failure_reason": "A bowl is put on top of the stove burner instead of a pot."
+    },
+    "Task 5": {
+        "general_folder_name": "boilWater2",
+        "failure_type": "planning",
+        "failure_subtype": "missing_step",
+        "failure_analysis": "The plan omits 'Toggle on faucet' and 'Toggle off faucet', so water is never added to the pot. The failure is baked into the plan before execution starts.",
+        "gt_failure_reason": "The robot never toggled on and off the faucet to fill the pot with water."
+    },
+    "Task 6": {
+        "general_folder_name": "boilWater3",
+        "failure_type": "execution",
+        "failure_subtype": "environment_blocked",
+        "failure_analysis": "Plan is correct. All stove burners were already occupied — an environmental constraint the robot failed to detect and resolve.",
+        "gt_failure_reason": "All stove burners are already occupied (by pan and red kettle), as a result, the pot cannot be put on stove burner."
+    },
+    "Task 7": {
+        "general_folder_name": "boilWater4",
+        "failure_type": "execution",
+        "failure_subtype": "drop",
+        "failure_analysis": "Plan is correct. Pot dropped from gripper during movement — a mechanical execution failure.",
+        "gt_failure_reason": "The robot accidentally dropped the pot when moving to stove burner."
+    },
+    "Task 8": {
+        "general_folder_name": "cutCarrot1",
+        "failure_type": "execution",
+        "failure_subtype": "action_failed",
+        "failure_analysis": "Plan is correct. Knife orientation went wrong during the slicing action itself — a low-level execution failure.",
+        "gt_failure_reason": "The robot failed to slice the carrot because knife orientation is wrong."
+    },
+    "Task 9": {
+        "general_folder_name": "cutCarrot2",
+        "failure_type": "execution",
+        "failure_subtype": "drop",
+        "failure_analysis": "Plan is correct. Carrot slice dropped during slicing — a mechanical execution failure.",
+        "gt_failure_reason": "The robot accidentally dropped one carrot slice to floor when slicing."
+    },
+    "Task 10": {
+        "general_folder_name": "putPearDrawer1",
+        "failure_type": "planning",
+        "failure_subtype": "missing_step",
+        "failure_analysis": "The plan has 'Pick up pear' → 'Put pear in drawer' but never includes 'Open drawer'. The drawer-opening step is absent from the plan entirely.",
+        "gt_failure_reason": "The robot never opened the drawer before trying to put pear in drawer."
+    },
+    "Task 11": {
+        "general_folder_name": "putPearDrawer2",
+        "failure_type": "execution",
+        "failure_subtype": "environment_blocked",
+        "failure_analysis": "Plan is correct (open → place → close). Drawer was too full to close — an environmental constraint the robot failed to detect.",
+        "gt_failure_reason": "The robot failed to close the drawer because the drawer is too full."
+    },
+    "Task 12": {
+        "general_folder_name": "putPearDrawer3",
+        "failure_type": "planning",
+        "failure_subtype": "wrong_order",
+        "failure_analysis": "Plan has 'Pick up pear' before 'Open drawer'. With gripper occupied, the drawer cannot be opened. The correct order is open drawer first — this ordering error is in the plan itself.",
+        "gt_failure_reason": "The robot gripper is occupied by the pear when it attempted to open drawer, as a result, the drawer cannot be opened."
+    },
+    "Task 13": {
+        "general_folder_name": "sauteeCarrot1",
+        "failure_type": "execution",
+        "failure_subtype": "object_confusion",
+        "failure_analysis": "Plan correctly specifies 'Pick up knife'. During execution the robot grasped a spoon instead — a perception failure despite a correct plan.",
+        "gt_failure_reason": "The robot has mistakenly picked up a spoon instead of knife to slice carrot."
+    },
+    "Task 14": {
+        "general_folder_name": "sauteeCarrot2",
+        "failure_type": "execution",
+        "failure_subtype": "wrong_location",
+        "failure_analysis": "Plan correctly specifies 'Put carrot slice in saucepan'. Robot placed the carrot on the stove burner directly — wrong placement during execution.",
+        "gt_failure_reason": "The carrot is put on top of the stove burner instead of on the saucepan."
+    },
+    "Task 15": {
+        "general_folder_name": "sauteeCarrot3",
+        "failure_type": "execution",
+        "failure_subtype": "drop",
+        "failure_analysis": "Plan is correct. Knife dropped during slicing — a mechanical execution failure.",
+        "gt_failure_reason": "The robot accidentally dropped the knife when trying to slice the carrot."
+    },
+    "Task 16": {
+        "general_folder_name": "sauteeCarrot4",
+        "failure_type": "planning",
+        "failure_subtype": "missing_step",
+        "failure_analysis": "The plan ends with 'Put carrot slice in saucepan' → 'Terminate', omitting 'Toggle on stove burner'. The required action is absent from the plan.",
+        "gt_failure_reason": "The robot never toggled on the stove burner, as a result, the carrot cannot be cooked."
+    },
+    "Task 17": {
+        "general_folder_name": "secureObjects1",
+        "failure_type": "planning",
+        "failure_subtype": "wrong_destination",
+        "failure_analysis": "The plan explicitly routes knife → fridge and pear → drawer, which is the opposite of the correct placement. Both destinations are wrong in the plan itself.",
+        "gt_failure_reason": "The knife should be placed inside the drawer and pear in fridge. The current placements are flipped."
+    },
+    "Task 18": {
+        "general_folder_name": "putFruitsBowl1",
+        "failure_type": "planning",
+        "failure_subtype": "wrong_object_in_plan",
+        "failure_analysis": "The plan includes 'Pick up carrot' / 'Put carrot in bowl'. Carrot is not a fruit — the plan includes an incorrect object before execution begins.",
+        "gt_failure_reason": "The robot should not put carrot in the bowl since it is not a fruit."
+    },
+    "Task 19": {
+        "general_folder_name": "putFruitsBowl2",
+        "failure_type": "planning",
+        "failure_subtype": "missing_object_in_plan",
+        "failure_analysis": "The plan only includes apple and pear, omitting strawberry entirely. Strawberry is present in the scene (visible in object_list) but never planned for — the plan is incomplete before execution starts.",
+        "gt_failure_reason": "The robot did not put strawberry in the bowl since it is a fruit."
+    },
+    "Task 20": {
+        "general_folder_name": "makeCoffee1",
+        "failure_type": "execution",
+        "failure_subtype": "action_failed",
+        "failure_analysis": "Plan correctly includes 'Toggle on coffee machine'. The toggle action failed during execution — a low-level execution failure.",
+        "gt_failure_reason": "The robot failed to toggle on coffee machine."
+    },
+    "Task 21": {
+        "general_folder_name": "makeCoffee2",
+        "failure_type": "execution",
+        "failure_subtype": "environment_blocked",
+        "failure_analysis": "Plan is correct. A mug already inside the machine blocked cup placement — an environmental constraint the robot failed to perceive.",
+        "gt_failure_reason": "A mug is already inside the coffee machine, as a result, the cup cannot be put inside."
+    },
+    "Task 22": {
+        "general_folder_name": "makeCoffee3",
+        "failure_type": "execution",
+        "failure_subtype": "object_confusion",
+        "failure_analysis": "Plan correctly targets the filled blue cup. During execution the robot grasped the wrong cup (pink) — a perception failure.",
+        "gt_failure_reason": "The robot mistakenly picked up the pink cup instead of the blue cup after filling blue cup with coffee."
+    },
+    "Task 23": {
+        "general_folder_name": "heatPot1",
+        "failure_type": "execution",
+        "failure_subtype": "environment_blocked",
+        "failure_analysis": "Plan is correct. A cutting board physically blocked the pot — an environmental obstacle the robot failed to perceive and clear.",
+        "gt_failure_reason": "The robot cannot pick up the pot due to a cutting board blocking the pot."
+    },
+    "Task 24": {
+        "general_folder_name": "heatPot2",
+        "failure_type": "execution",
+        "failure_subtype": "action_failed",
+        "failure_analysis": "Plan correctly includes 'Toggle on stove burner'. The toggle action failed during execution — a low-level execution failure.",
+        "gt_failure_reason": "The robot failed to toggle on stove burner."
+    },
+    "Task 25": {
+        "general_folder_name": "appleInFridge1",
+        "failure_type": "execution",
+        "failure_subtype": "object_confusion",
+        "failure_analysis": "Plan correctly targets the bowl containing the apple. Robot grasped the wrong (empty dark blue) bowl — a perception failure.",
+        "gt_failure_reason": "The robot put the dark blue bowl (empty) instead of the white bowl with apple inside the fridge."
+    },
+    "Task 26": {
+        "general_folder_name": "appleInFridge2",
+        "failure_type": "execution",
+        "failure_subtype": "wrong_location",
+        "failure_analysis": "Plan correctly specifies 'Put bowl in fridge'. Robot placed bowl on top of the fridge instead of inside — wrong placement during execution.",
+        "gt_failure_reason": "The robot put the bowl with apple on top of the fridge instead of inside it."
+    },
+    "Task 27": {
+        "general_folder_name": "appleInFridge3",
+        "failure_type": "planning",
+        "failure_subtype": "wrong_order",
+        "failure_analysis": "Plan has 'Pick up bowl' → 'Put bowl in fridge' → 'Open fridge'. The fridge must be opened before placing the bowl inside. Wrong action order is in the plan itself.",
+        "gt_failure_reason": "The robot did not open the fridge before attempting to put the bowl inside."
+    },
+    "Task 28": {
+        "general_folder_name": "appleInFridge4",
+        "failure_type": "planning",
+        "failure_subtype": "missing_step",
+        "failure_analysis": "Plan ends at 'Put bowl in fridge' → 'Terminate', omitting 'Close fridge'. Success condition requires a closed fridge — the step is absent from the plan.",
+        "gt_failure_reason": "The robot never closed the fridge door."
+    },
+    "Task 29": {
+        "general_folder_name": "heatPotato1",
+        "failure_type": "planning",
+        "failure_subtype": "wrong_order",
+        "failure_analysis": "Plan sequences 'Toggle on microwave' before 'Close microwave'. A microwave cannot be toggled on with an open door — the wrong order is in the plan itself.",
+        "gt_failure_reason": "The robot failed because it attempted to toggle on the microwave while the microwave door was still open."
+    },
+    "Task 30": {
+        "general_folder_name": "heatPotato2",
+        "failure_type": "planning",
+        "failure_subtype": "wrong_order",
+        "failure_analysis": "Plan sequences 'Toggle on microwave' then immediately 'Open microwave'. The microwave must be toggled off before opening — the wrong order is in the plan itself.",
+        "gt_failure_reason": "The robot failed because it attempted to open the microwave door while it was still toggled on."
+    },
+    "_summary": {
+        "total_tasks": 30,
+        "planning_failures": 12,
+        "execution_failures": 18,
+        "planning_subtypes": {
+            "missing_step": ["Task 5", "Task 10", "Task 16", "Task 28"],
+            "wrong_object_in_plan": ["Task 4", "Task 18"],
+            "missing_object_in_plan": ["Task 19"],
+            "wrong_order": ["Task 12", "Task 27", "Task 29", "Task 30"],
+            "wrong_destination": ["Task 17"]
+        },
+        "execution_subtypes": {
+            "drop": ["Task 2", "Task 7", "Task 9", "Task 15"],
+            "environment_blocked": ["Task 1", "Task 3", "Task 6", "Task 11", "Task 21", "Task 23"],
+            "object_confusion": ["Task 13", "Task 22", "Task 25"],
+            "wrong_location": ["Task 14", "Task 26"],
+            "action_failed": ["Task 8", "Task 20", "Task 24"]
+        }
+    }
+}

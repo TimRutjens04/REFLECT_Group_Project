@@ -1,3 +1,6 @@
+[tool.poetry]
+package-mode = false
+
 [project]
 name = "eai-group-project"
 version = "0.1.0"
@@ -27,6 +30,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+exclude = ["notebooks/", "*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "C90"]
@@ -39,3 +43,8 @@ max-complexity = 15
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
+
+[dependency-groups]
+dev = [
+    "ruff (>=0.15.6,<0.16.0)"
+]
