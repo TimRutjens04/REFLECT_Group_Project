@@ -8,7 +8,6 @@ branches:
   - name: main
     protection:
       enforce_admins: true
-      allow_deletions: false
       allow_force_pushes: false
       required_pull_request_reviews:
         required_approving_review_count: 1
