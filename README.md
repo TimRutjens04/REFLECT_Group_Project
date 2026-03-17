@@ -5,7 +5,7 @@ Encodes robot episode video and audio into compact state representations using p
 
 ## Project structure
 
-```
+```bash
 code/               pipeline scripts (align → encode → analyze)
 notebooks/          exploration.ipynb — narrative analysis with all figures
 docs/               research plan and project deliverables
