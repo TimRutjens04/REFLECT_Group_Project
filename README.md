@@ -46,7 +46,7 @@ winget install Casey.Just
 ### Install dependencies
 
 ```bash
-poetry install
+just install
 ```
 
 > Some packages (torch, torchvision, wav2clip) are pinned for Apple Silicon / MPS compatibility.

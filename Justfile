@@ -9,6 +9,12 @@ python := "poetry run python3"
 default:
     @just --list
 
+# ── Setup ─────────────────────────────────────────────────────────────────────
+
+# Install all dependencies via Poetry
+install:
+    poetry install
+
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
 # Run full pipeline: align → encode → analyze
@@ -51,15 +57,15 @@ sanity:
 
 # Lint all code
 lint:
-    poetry run ruff check code/ notebooks/
+    poetry run ruff check code/
 
 # Auto-fix lint issues
 lint-fix:
-    poetry run ruff check --fix code/ notebooks/
+    poetry run ruff check --fix code/
 
 # Format all code
 fmt:
-    poetry run ruff format code/ notebooks/
+    poetry run ruff format code/
 
 # Lint + format in one pass
 check: lint fmt
