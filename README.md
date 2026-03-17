@@ -17,8 +17,6 @@ encoded/            output of encode.py — .npz per episode
 analysis/           output of analyze.py — figures + metrics.json
 ```
 
----
-
 ## Setup
 
 ### Prerequisites
