@@ -19,7 +19,8 @@ dependencies = [
     "matplotlib (>=3.10.8,<4.0.0)",
     "wav2clip (>=0.1.0,<0.2.0)",
     "openai-clip (>=1.0.1,<2.0.0)",
-    "setuptools (>=82.0.1,<83.0.0)"
+    "setuptools (>=82.0.1,<83.0.0)",
+    "streamlit (>=1.55.0,<2.0.0)"
 ]
 
 

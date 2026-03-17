@@ -43,6 +43,10 @@ notebook:
         --ExecutePreprocessor.timeout=300 \
         --ExecutePreprocessor.kernel_name=python3
 
+# Launch the embedding visualizer GUI
+gui:
+    poetry run streamlit run code/gui.py
+
 # ── Inspection ────────────────────────────────────────────────────────────────
 
 # Inspect raw data layout
