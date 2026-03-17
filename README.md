@@ -3,8 +3,6 @@
 Research pipeline for the **RoboFail / REFLECT** dataset (Columbia University).
 Encodes robot episode video and audio into compact state representations using pretrained CLIP and WAV2CLIP embeddings, then analyzes normal vs. failure separation.
 
----
-
 ## Project structure
 
 ```
