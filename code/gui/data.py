@@ -25,8 +25,8 @@ def load_episode(episode_id: str) -> dict:
     """Load frames from aligned/ and embeddings from encoded/."""
     log.info("Loading episode: %s", episode_id)
     t_load = time.perf_counter()
-    aligned = np.load(os.path.join(ALIGNED_DIR, f"{episode_id}.npz"), allow_pickle=True)
-    encoded = np.load(os.path.join(ENCODED_DIR, f"{episode_id}.npz"), allow_pickle=True)
+    aligned = np.load(os.path.join(ALIGNED_DIR, f"{episode_id}.npz"), allow_pickle=False)
+    encoded = np.load(os.path.join(ENCODED_DIR, f"{episode_id}.npz"), allow_pickle=False)
 
     visual_emb = encoded["visual_embeddings"].astype(np.float32)
     audio_emb  = encoded["audio_embeddings"].astype(np.float32)
