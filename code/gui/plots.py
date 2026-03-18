@@ -147,59 +147,51 @@ def plot_inline_scene_graph(object_locs: list[dict], attn_7x7: np.ndarray) -> pl
 
 
 def plot_scene_graph(object_locs: list[dict], attn_7x7: np.ndarray,
-                     first_frame: np.ndarray, actions: list[str]) -> plt.Figure:
+                     frame: np.ndarray, actions: list[str]) -> plt.Figure:
     """
-    Full-width object localization panel:
-    - Left: first frame with OWL-ViT bounding boxes overlaid.
-      Yellow border = object center is within top-3 attention patches.
-    - Right: action list.
+    Full-width object localization panel.
+    Shows object bounding boxes on the frame where the active snapshot was captured.
+
+    Layout: left = frame with boxes | right = planned action list.
     """
     fig, (ax_frame, ax_actions) = plt.subplots(
         1, 2, figsize=(10, 4),
-        gridspec_kw={"width_ratios": [3, 1]}
+        gridspec_kw={"width_ratios": [3, 1]},
     )
     fig.patch.set_facecolor(DARK_BG)
+
+    # ── Top-3 attention patches ──────────────────────────────────────────────
+    flat_idx    = np.argsort(attn_7x7.ravel())[::-1][:3]
+    top_patches = {divmod(int(i), 7) for i in flat_idx}
+
+    colors    = plt.cm.Set2(np.linspace(0, 1, max(len(object_locs), 1)))
+    obj_index = {o["name"]: i for i, o in enumerate(object_locs)}
 
     # ── Left: frame + bounding boxes ────────────────────────────────────────
     ax_frame.set_facecolor(DARK_BG)
     ax_frame.axis("off")
-    ax_frame.set_title(
-        "Object localization — OWL-ViT v2 zero-shot detection",
-        color="white", fontsize=9,
-    )
-    ax_frame.imshow(first_frame)
-
-    h, w = first_frame.shape[:2]
-
-    # Top-3 attention patches in 7×7 grid
-    flat_idx = np.argsort(attn_7x7.ravel())[::-1][:3]
-    top_patches = {divmod(int(i), 7) for i in flat_idx}
-
-    colors = plt.cm.Set2(np.linspace(0, 1, max(len(object_locs), 1)))
+    ax_frame.set_title("OWL-ViT v2 — object localization", color="white", fontsize=9)
+    ax_frame.imshow(frame)
+    h, w = frame.shape[:2]
 
     not_detected_count = 0
-
-    for i, obj in enumerate(object_locs):
-        color_rgba = colors[i]
-        color_rgb  = color_rgba[:3]
-
+    for obj in object_locs:
+        i         = obj_index[obj["name"]]
+        color_rgb = colors[i][:3]
         if obj["detected"] and obj["box"] is not None:
             x1, y1, x2, y2 = obj["box"]
-            pr, pc = _box_to_attn_patch(obj["cx_norm"], obj["cy_norm"])
+            pr, pc     = _box_to_attn_patch(obj["cx_norm"], obj["cy_norm"])
             attended   = (pr, pc) in top_patches
             edge_color = CURSOR if attended else color_rgb
             lw         = 2.5    if attended else 1.5
-
             rect = plt.Rectangle(
                 (x1, y1), x2 - x1, y2 - y1,
                 fill=False, edgecolor=edge_color, linewidth=lw, zorder=3,
             )
             ax_frame.add_patch(rect)
-
             short = " ".join(obj["name"].split()[:2])
-            label = f"{short} ({obj['score']:.2f})"
             ax_frame.text(
-                x1, max(y1 - 3, 0), label,
+                x1, max(y1 - 3, 0), f"{short} ({obj['score']:.2f})",
                 color="white", fontsize=6, va="bottom", zorder=4,
                 bbox=dict(facecolor=color_rgb, alpha=0.75, pad=1, edgecolor="none"),
             )
@@ -208,7 +200,6 @@ def plot_scene_graph(object_locs: list[dict], attn_7x7: np.ndarray,
                 8, h - 10 - not_detected_count * 14,
                 f"✗ {obj['name']} (not detected)",
                 color="#888888", fontsize=6, va="bottom",
-                transform=ax_frame.transData,
             )
             not_detected_count += 1
 
