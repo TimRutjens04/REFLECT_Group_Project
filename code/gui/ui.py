@@ -175,6 +175,8 @@ def main():
         st.session_state["current_frame"] = 0
         st.session_state["playing"] = False
         st.session_state["selected_object"] = None
+        # Clear persistent object selector widget state to avoid stale selections
+        st.session_state.pop("obj_selector", None)
         st.session_state["loaded_episode"] = episode_id
 
     data       = load_episode(episode_id)
