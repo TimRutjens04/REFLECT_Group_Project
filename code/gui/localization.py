@@ -10,7 +10,8 @@ from .data import load_episode
 from .logger import log
 
 OWLVIT_THRESHOLD  = 0.10  # detections below this are marked "not detected"
-MAX_SAMPLE_FRAMES = 8     # hard cap on OWL-ViT inference calls per episode
+MAX_SPIKE_FRAMES  = 8     # max additional spike frames on top of failure windows
+FAILURE_WINDOW    = 10    # frames on each side of a failure to sample densely
 MAX_ALIASES       = 5     # max text queries per object (incl. original name)
 
 
@@ -75,26 +76,31 @@ def _select_sample_frames(frame_deltas: np.ndarray,
 
     Strategy:
       1. Always include frame 0 (initial scene layout).
-      2. Always include every failure frame (we care most about these).
-      3. Include frames where frame_deltas > mean + 1.5*std — these are
-         moments of significant scene change where object positions may
-         have shifted, making fresh detection informative.
-      4. Cap at MAX_SAMPLE_FRAMES total, prioritising spikes by magnitude.
+      2. Always include every failure frame plus a ±FAILURE_WINDOW dense window
+         around each — this gives per-frame detection scores for the full
+         lead-up to each failure (no cap on these).
+      3. Add up to MAX_SPIKE_FRAMES additional frames where frame_deltas >
+         mean + 1.5*std, to capture object movement between failure windows.
     """
     n = len(frame_deltas)
+    failure_indices = [int(i) for i, f in enumerate(failure_labels) if f]
 
+    # Dense failure windows — uncapped
     must_include: set[int] = {0}
-    must_include.update(int(i) for i, f in enumerate(failure_labels) if f)
+    for fi in failure_indices:
+        for w in range(max(0, fi - FAILURE_WINDOW), min(n, fi + FAILURE_WINDOW + 1)):
+            must_include.add(w)
 
+    # Sparse spike frames — capped
     threshold    = frame_deltas.mean() + 1.5 * frame_deltas.std()
-    spike_frames = [i for i in range(n) if frame_deltas[i] > threshold]
-    spike_frames.sort(key=lambda i: -frame_deltas[i])  # highest spikes first
+    spike_frames = [i for i in range(n)
+                    if frame_deltas[i] > threshold and i not in must_include]
+    spike_frames.sort(key=lambda i: -frame_deltas[i])
 
-    candidates = list(must_include) + [i for i in spike_frames if i not in must_include]
-    selected   = sorted(candidates[:MAX_SAMPLE_FRAMES])
+    selected = sorted(must_include | set(spike_frames[:MAX_SPIKE_FRAMES]))
 
-    log.info("Frame sampling: threshold=%.4f  spikes=%d  selected=%s",
-             threshold, len(spike_frames), selected)
+    log.info("Frame sampling: failure_windows=%d  spikes=%d  total=%d  selected=%s",
+             len(must_include), len(spike_frames), len(selected), selected)
     return selected
 
 

@@ -5,10 +5,10 @@ import streamlit as st
 
 from .attention import compute_attention_maps, draw_object_box, overlay_attention
 from .data import list_episodes, load_episode, load_task_metadata
-from .localization import active_objects, compute_cur_objects
+from .localization import active_objects, compute_scene_graph
 from .logger import log
 from .models import load_clip_model, load_owlvit_model
-from .plots import plot_inline_cur_objects, plot_pca, plot_cur_objects, plot_signals
+from .plots import plot_inline_scene_graph, plot_pca, plot_scene_graph, plot_signals
 
 
 def _render_sidebar() -> tuple[str, float, bool, float]:
@@ -66,7 +66,7 @@ def _load_perception_data(episode_id: str, object_list: list[str]):
     if object_list:
         owlvit_model, owlvit_processor = load_owlvit_model()
         try:
-            cur_objects = compute_cur_objects(
+            cur_objects = compute_scene_graph(
                 episode_id, tuple(object_list), owlvit_model, owlvit_processor
             )
         except Exception:
@@ -125,6 +125,20 @@ def _render_frame_col(data: dict, idx: int, n: int, timestamps, attn_maps,
             else:
                 st.markdown("**Objects in top-3 patches:** _(none)_")
 
+            # OWL-ViT confidence scores — all objects, no threshold filter
+            if cur_objects is not None:
+                from .localization import OWLVIT_THRESHOLD
+                st.markdown("**OWL-ViT confidence at this frame:**")
+                for obj in cur_objects:
+                    score = obj["score"]
+                    above = score >= OWLVIT_THRESHOLD
+                    bar   = "█" * int(score * 20)
+                    color = "green" if above else "gray"
+                    st.markdown(
+                        f":{color}[{obj['name']}: {score:.3f} {bar}]"
+                        + ("" if above else " _(below threshold)_")
+                    )
+
     frame = data["frames"][idx]
     display_frame = overlay_attention(frame, attn_maps[idx], alpha=attn_alpha) \
         if attn_maps is not None else frame.copy()
@@ -145,7 +159,7 @@ def _render_frame_col(data: dict, idx: int, n: int, timestamps, attn_maps,
 
     # Scene graph — spatial relationships between objects vs. current attention
     if cur_objects is not None and attn_maps is not None:
-        fig_sg = plot_inline_cur_objects(cur_objects, attn_maps[idx])
+        fig_sg = plot_inline_scene_graph(cur_objects, attn_maps[idx])
         st.pyplot(fig_sg, use_container_width=True)
         plt.close(fig_sg)
         st.caption(
@@ -186,7 +200,7 @@ def _render_object_localization_section(cur_objects, attn_maps, idx: int,
         )
         # Show the snapshot's own source frame alongside the boxes
         snapshot_frame = all_frames[idx]
-        fig_sg = plot_cur_objects(cur_objects, attn_maps[idx], snapshot_frame, actions)
+        fig_sg = plot_scene_graph(cur_objects, attn_maps[idx], snapshot_frame, actions)
         st.pyplot(fig_sg, use_container_width=True)
         plt.close(fig_sg)
     elif attn_maps is not None and not object_list:

@@ -1,7 +1,7 @@
 # REFLECT — RoboFail multimodal pipeline
 # Usage: just <recipe>
 
-set dotenv-load := false
+set dotenv-load := true
 
 python := "poetry run python3"
 
