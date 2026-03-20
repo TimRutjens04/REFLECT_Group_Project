@@ -69,6 +69,44 @@ def plot_pca(pca_coords, timestamps, idx):
     return fig
 
 
+def plot_audio_waveform(audio_windows: np.ndarray, audio_sr: int, idx: int) -> plt.Figure:
+    """
+    Waveform panel for the current frame's audio window.
+    Top subplot: current-frame waveform.
+    Bottom subplot: RMS energy over the full episode (one value per frame).
+    """
+    window = audio_windows[idx]
+    n_samples = len(window)
+    t_window  = np.linspace(-n_samples / (2 * audio_sr), n_samples / (2 * audio_sr), n_samples)
+
+    # Per-frame RMS energy
+    rms = np.sqrt((audio_windows ** 2).mean(axis=1))
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7, 3.5),
+                                    gridspec_kw={"height_ratios": [2, 1]})
+    fig.patch.set_facecolor(DARK_BG)
+    for ax in (ax1, ax2):
+        _style_ax(ax)
+
+    # Waveform
+    ax1.plot(t_window, window, color=LINE_AUD, lw=0.8, alpha=0.9)
+    ax1.axhline(0, color=GRID_COL, lw=0.6)
+    ax1.set_ylabel("Amplitude", color="white", fontsize=8)
+    ax1.set_xlabel("Time offset (s)", color="white", fontsize=8)
+    ax1.set_title("Audio window — current frame", color="white", fontsize=9)
+
+    # Episode-level RMS energy with cursor
+    ax2.fill_between(range(len(rms)), rms, color=LINE_AUD, alpha=0.35)
+    ax2.plot(rms, color=LINE_AUD, lw=1.2)
+    ax2.axvline(idx, color=CURSOR, lw=1.5, linestyle="--")
+    ax2.set_ylabel("RMS energy", color="white", fontsize=8)
+    ax2.set_xlabel("Frame index", color="white", fontsize=8)
+    ax2.set_title("Audio energy over episode", color="white", fontsize=9)
+
+    fig.tight_layout(pad=0.8)
+    return fig
+
+
 def plot_inline_scene_graph(object_locs: list[dict], attn_7x7: np.ndarray) -> plt.Figure:
     """
     Compact scene graph for the left column.

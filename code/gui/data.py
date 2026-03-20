@@ -55,6 +55,8 @@ def load_episode(episode_id: str) -> dict:
         "audio_norms":    audio_norms,
         "frame_deltas":   frame_deltas,
         "pca_coords":     pca_coords,
+        "audio_windows":  aligned["audio_windows"],
+        "audio_sr":       int(aligned["audio_sr"]),
     }
     log.info(
         "Episode %s loaded: %d frames, %.1fs duration, %d failure frames  [%.2fs]",

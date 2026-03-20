@@ -1,14 +1,47 @@
+import io
+import os
 import time
 
 import matplotlib.pyplot as plt
 import streamlit as st
 
 from .attention import compute_attention_maps, draw_object_box, overlay_attention
+from .config import ROOT
 from .data import list_episodes, load_episode, load_task_metadata
 from .localization import active_objects, compute_scene_graph
 from .logger import log
 from .models import load_clip_model, load_owlvit_model
-from .plots import plot_inline_scene_graph, plot_pca, plot_scene_graph, plot_signals
+from .plots import (
+    plot_audio_waveform,
+    plot_inline_scene_graph,
+    plot_pca,
+    plot_scene_graph,
+    plot_signals,
+)
+
+
+def _export_button(fig: plt.Figure, episode_id: str, panel_name: str) -> None:
+    """Save fig to analysis/figures/<episode>/<panel>.png and show a download button."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    buf.seek(0)
+    png_bytes = buf.getvalue()
+
+    # Also persist to disk
+    out_dir = os.path.join(ROOT, "analysis", "figures", episode_id)
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{panel_name}.png")
+    with open(out_path, "wb") as f:
+        f.write(png_bytes)
+
+    st.download_button(
+        label=f"⬇ Export {panel_name}",
+        data=png_bytes,
+        file_name=f"{episode_id}_{panel_name}.png",
+        mime="image/png",
+        use_container_width=True,
+    )
 
 
 def _render_sidebar() -> tuple[str, float, bool, float]:
@@ -159,8 +192,10 @@ def _render_frame_col(data: dict, idx: int, n: int, timestamps, attn_maps,
 
     # Scene graph — spatial relationships between objects vs. current attention
     if cur_objects is not None and attn_maps is not None:
+        episode_id = st.session_state.get("loaded_episode", "unknown")
         fig_sg = plot_inline_scene_graph(cur_objects, attn_maps[idx])
         st.pyplot(fig_sg, use_container_width=True)
+        _export_button(fig_sg, episode_id, f"scene_graph_f{idx:04d}")
         plt.close(fig_sg)
         st.caption(
             "Nodes = OWL-ViT detected objects. Edges = spatial relationships. "
@@ -188,7 +223,7 @@ def _render_frame_col(data: dict, idx: int, n: int, timestamps, attn_maps,
 
 def _render_object_localization_section(cur_objects, attn_maps, idx: int,
                                          all_frames, actions: list[str],
-                                         object_list: list[str]):
+                                         object_list: list[str], episode_id: str):
     """Render full-width object localization panel below the main layout."""
     if cur_objects is not None and attn_maps is not None:
         st.divider()
@@ -202,6 +237,7 @@ def _render_object_localization_section(cur_objects, attn_maps, idx: int,
         snapshot_frame = all_frames[idx]
         fig_sg = plot_scene_graph(cur_objects, attn_maps[idx], snapshot_frame, actions)
         st.pyplot(fig_sg, use_container_width=True)
+        _export_button(fig_sg, episode_id, f"localization_f{idx:04d}")
         plt.close(fig_sg)
     elif attn_maps is not None and not object_list:
         st.info("No object list found for this episode in tasks_real_world.json — "
@@ -283,16 +319,23 @@ def main():
             data["frame_deltas"], idx,
         )
         st.pyplot(fig_sig, use_container_width=True)
+        _export_button(fig_sig, episode_id, f"signals_f{idx:04d}")
         plt.close(fig_sig)
 
         fig_pca = plot_pca(data["pca_coords"], timestamps, idx)
         st.pyplot(fig_pca, use_container_width=True)
+        _export_button(fig_pca, episode_id, f"pca_f{idx:04d}")
         plt.close(fig_pca)
+
+        fig_wav = plot_audio_waveform(data["audio_windows"], data["audio_sr"], idx)
+        st.pyplot(fig_wav, use_container_width=True)
+        _export_button(fig_wav, episode_id, f"audio_f{idx:04d}")
+        plt.close(fig_wav)
 
     _render_object_localization_section(
         cur_objects, attn_maps, idx,
         data["frames"], actions,
-        object_list,
+        object_list, episode_id,
     )
 
     # ── Playback loop ────────────────────────────────────────────────────────
