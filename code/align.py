@@ -328,10 +328,10 @@ def align_real_episode(episode_dir: str, output_dir: str,
 # ---------------------------------------------------------------------------
 
 SIM_TASKS = ["boilWater", "makeSalad"]
-REAL_TASKS = ["putFruitsBowl"]
 
 
-def iter_episodes(task_name: str):
+def iter_sim_episodes(task_name: str):
+    """Yield episode dirs nested inside data/<task_name>/."""
     task_dir = os.path.join(DATA_DIR, task_name)
     if not os.path.isdir(task_dir):
         return
@@ -341,11 +341,45 @@ def iter_episodes(task_name: str):
             yield ep_dir
 
 
+def iter_real_episodes(tasks_meta: dict):
+    """
+    Yield (episode_dir, meta) for every real-world episode in tasks_real_world.json
+    whose general_folder_name exists as a top-level directory in DATA_DIR.
+    Also handles the legacy nested layout (data/<task>/<episode>/).
+    """
+    seen: set[str] = set()
+
+    # Primary: top-level episode dirs referenced in tasks_real_world.json
+    for meta in tasks_meta.values():
+        folder = meta.get("general_folder_name", "")
+        if not folder:
+            continue
+        ep_dir = os.path.join(DATA_DIR, folder)
+        if os.path.isdir(ep_dir) and folder not in seen:
+            seen.add(folder)
+            yield ep_dir
+
+    # Legacy: nested dirs inside task folders that have a videos/ subdirectory
+    # (e.g. data/putFruitsBowl/putFruitsBowl2/)
+    for entry in sorted(os.listdir(DATA_DIR)):
+        task_dir = os.path.join(DATA_DIR, entry)
+        if not os.path.isdir(task_dir) or entry.startswith("."):
+            continue
+        for ep in sorted(os.listdir(task_dir)):
+            ep_dir = os.path.join(task_dir, ep)
+            if (os.path.isdir(ep_dir)
+                    and not ep.startswith(".")
+                    and os.path.isdir(os.path.join(ep_dir, "videos"))
+                    and ep not in seen):
+                seen.add(ep)
+                yield ep_dir
+
+
 def main():
     tasks_meta = load_tasks_real_world(DATA_DIR)
 
     # --- Sim episodes ---
-    sim_episodes = [ep for task in SIM_TASKS for ep in iter_episodes(task)]
+    sim_episodes = [ep for task in SIM_TASKS for ep in iter_sim_episodes(task)]
     print(f"Found {len(sim_episodes)} sim episodes")
     for ep_dir in tqdm(sim_episodes, desc="Sim episodes"):
         ep_id = os.path.basename(ep_dir)
@@ -356,7 +390,7 @@ def main():
             tqdm.write(f"  ✗ {ep_id} — {e}")
 
     # --- Real episodes ---
-    real_episodes = [ep for task in REAL_TASKS for ep in iter_episodes(task)]
+    real_episodes = list(iter_real_episodes(tasks_meta))
     print(f"Found {len(real_episodes)} real episodes")
     for ep_dir in tqdm(real_episodes, desc="Real episodes"):
         ep_id = os.path.basename(ep_dir)
