@@ -3,8 +3,6 @@
 Research pipeline for the **RoboFail / REFLECT** dataset (Columbia University).
 Encodes robot episode video and audio into compact state representations using pretrained CLIP and WAV2CLIP embeddings, then analyzes normal vs. failure separation.
 
----
-
 ## Project structure
 
 ```
@@ -46,7 +44,7 @@ winget install Casey.Just
 ### Install dependencies
 
 ```bash
-poetry install
+just install
 ```
 
 > Some packages (torch, torchvision, wav2clip) are pinned for Apple Silicon / MPS compatibility.
@@ -130,7 +128,12 @@ audio_embeddings     (N, 512)   float32 — WAV2CLIP, L2-normalized
 failure_labels       (N,)       bool
 fps_base, audio_sr
 ```
-
 ---
+### Branching
+
+When creating a new branch please adhere to the following structure; FirstNameInitial+SecondNameInitial_BranchPurpose
+So f.e.: TR_Project_Setup 
+Please keep it as specific as possible so not TR_Work TR_BugFix
+
 
 Key metric results are written to `analysis/metrics.json` after each `just analyze` run.

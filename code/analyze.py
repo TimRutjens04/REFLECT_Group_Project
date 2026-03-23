@@ -23,13 +23,12 @@ import os
 import sys
 import warnings
 
-import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import matplotlib.pyplot as plt
 import numpy as np
 from scipy.ndimage import uniform_filter1d
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
-from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore")
 
@@ -514,7 +513,7 @@ def main(encoded_dir: str):
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
 
-    print(f"\n=== Metrics Summary ===")
+    print("\n=== Metrics Summary ===")
     for k, v in metrics.items():
         print(f"  {k}: {v}")
     print(f"\nAll outputs saved to: {OUTPUT_DIR}")

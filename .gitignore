@@ -62,6 +62,7 @@ Thumbs.db
 data/
 aligned/
 encoded/
+owl/
 analysis/
 outputs/
 logs/

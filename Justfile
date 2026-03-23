@@ -1,7 +1,7 @@
 # REFLECT — RoboFail multimodal pipeline
 # Usage: just <recipe>
 
-set dotenv-load := false
+set dotenv-load := true
 
 python := "poetry run python3"
 
@@ -9,10 +9,16 @@ python := "poetry run python3"
 default:
     @just --list
 
+# ── Setup ─────────────────────────────────────────────────────────────────────
+
+# Install all dependencies via Poetry
+install:
+    poetry install
+
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
-# Run full pipeline: align → encode → analyze
-all: align encode analyze
+# Run full pipeline: align → encode → owl → analyze
+all: align encode owl analyze
 
 # Align all episodes (raw data → aligned/*.npz)
 align:
@@ -26,6 +32,14 @@ align-one episode:
 encode:
     {{python}} code/encode.py aligned/
 
+# Run OWL-ViT object detection on all real-world episodes (→ owl/*.npz)
+owl:
+    {{python}} code/owl_detect.py
+
+# Run OWL-ViT for a single episode by name, e.g: just owl-one appleInFridge1
+owl-one episode:
+    {{python}} code/owl_detect.py {{episode}}
+
 # Analyze all encoded episodes (encoded/*.npz → analysis/)
 analyze:
     {{python}} code/analyze.py encoded/
@@ -36,6 +50,10 @@ notebook:
         notebooks/exploration.ipynb \
         --ExecutePreprocessor.timeout=300 \
         --ExecutePreprocessor.kernel_name=python3
+
+# Launch the embedding visualizer GUI
+gui:
+    poetry run streamlit run code/gui.py
 
 # ── Inspection ────────────────────────────────────────────────────────────────
 
@@ -51,15 +69,15 @@ sanity:
 
 # Lint all code
 lint:
-    poetry run ruff check code/ notebooks/
+    poetry run ruff check code/
 
 # Auto-fix lint issues
 lint-fix:
-    poetry run ruff check --fix code/ notebooks/
+    poetry run ruff check --fix code/
 
 # Format all code
 fmt:
-    poetry run ruff format code/ notebooks/
+    poetry run ruff format code/
 
 # Lint + format in one pass
 check: lint fmt
