@@ -8,7 +8,7 @@ import streamlit as st
 from .attention import compute_attention_maps, draw_object_box, overlay_attention
 from .config import ROOT
 from .data import list_episodes, load_episode, load_task_metadata
-from .localization import active_objects, compute_scene_graph
+from .localization import active_objects, compute_scene_graph, load_precomputed_owl
 from .logger import log
 from .models import load_clip_model, load_owlvit_model
 from .plots import (
@@ -95,16 +95,20 @@ def _load_perception_data(episode_id: str, object_list: list[str]):
         log.exception("Failed to compute attention maps for %s", episode_id)
         st.error("Attention map computation failed — see logs/gui.log for details.")
 
-    # Object detection: OWL-ViT v2 (true zero-shot detection with bounding boxes)
+    # Object detection: prefer pre-computed owl/*.npz, fall back to on-the-fly
     if object_list:
-        owlvit_model, owlvit_processor = load_owlvit_model()
-        try:
-            cur_objects = compute_scene_graph(
-                episode_id, tuple(object_list), owlvit_model, owlvit_processor
-            )
-        except Exception:
-            log.exception("Failed to compute scene graph for %s", episode_id)
-            st.error("Scene graph computation failed — see logs/gui.log for details.")
+        cur_objects = load_precomputed_owl(episode_id)
+        if cur_objects is None:
+            st.info("Pre-computed OWL-ViT not found — run `just owl` to pre-compute. "
+                    "Running on-the-fly (slower)...")
+            owlvit_model, owlvit_processor = load_owlvit_model()
+            try:
+                cur_objects = compute_scene_graph(
+                    episode_id, tuple(object_list), owlvit_model, owlvit_processor
+                )
+            except Exception:
+                log.exception("Failed to compute scene graph for %s", episode_id)
+                st.error("Scene graph computation failed — see logs/gui.log for details.")
 
     return attn_maps, cur_objects
 

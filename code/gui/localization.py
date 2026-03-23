@@ -1,3 +1,5 @@
+import json
+import os
 import time
 
 import numpy as np
@@ -5,7 +7,7 @@ import streamlit as st
 import torch
 from PIL import Image
 
-from .config import DEVICE
+from .config import DEVICE, OWL_DIR, TASKS_JSON
 from .data import load_episode
 from .logger import log
 
@@ -102,6 +104,67 @@ def _select_sample_frames(frame_deltas: np.ndarray,
     log.info("Frame sampling: failure_windows=%d  spikes=%d  total=%d  selected=%s",
              len(must_include), len(spike_frames), len(selected), selected)
     return selected
+
+
+def _owl_npz_path(episode_id: str) -> str:
+    return os.path.join(OWL_DIR, f"{episode_id}.npz")
+
+
+def _object_list_for(episode_id: str) -> list[str]:
+    """Look up the object_list for an episode from tasks_real_world.json."""
+    if not os.path.exists(TASKS_JSON):
+        return []
+    with open(TASKS_JSON) as f:
+        raw = json.load(f)
+    meta = {v["general_folder_name"]: v for v in raw.values()}
+    return meta.get(episode_id, {}).get("object_list", [])
+
+
+@st.cache_data(show_spinner="Loading pre-computed OWL-ViT detections...")
+def load_precomputed_owl(episode_id: str) -> dict[int, list[dict]] | None:
+    """
+    Load pre-computed OWL-ViT detections from owl/<episode_id>.npz.
+    Returns a snapshots dict (same format as compute_scene_graph) covering
+    ALL frames, or None if the file does not exist.
+    """
+    path = _owl_npz_path(episode_id)
+    if not os.path.exists(path):
+        return None
+
+    object_list = _object_list_for(episode_id)
+    if not object_list:
+        return None
+
+    d              = np.load(path, allow_pickle=False)
+    sample_indices = d["sample_indices"].tolist()   # [frame_idx, ...]
+    scores         = d["scores"]                    # (M, n_obj)
+    detected       = d["detected"]                  # (M, n_obj)
+    cx             = d["cx_norm"]                   # (M, n_obj)
+    cy             = d["cy_norm"]                   # (M, n_obj)
+    boxes_np       = d["boxes"]                     # (M, n_obj, 4)
+
+    snapshots: dict[int, list[dict]] = {}
+    for row, frame_idx in enumerate(sample_indices):
+        objs = []
+        for i, name in enumerate(object_list):
+            s   = float(scores[row, i])
+            det = bool(detected[row, i])
+            b   = boxes_np[row, i]
+            box = [int(b[0]), int(b[1]), int(b[2]), int(b[3])] \
+                  if det and not np.any(np.isnan(b)) else None
+            objs.append({
+                "name":     name,
+                "score":    s,
+                "detected": det,
+                "box":      box,
+                "cx_norm":  float(cx[row, i]),
+                "cy_norm":  float(cy[row, i]),
+            })
+        snapshots[frame_idx] = objs
+
+    log.info("Loaded pre-computed OWL-ViT for %s: %d sampled frames, %d objects",
+             episode_id, len(sample_indices), len(object_list))
+    return snapshots
 
 
 @st.cache_data(show_spinner="Detecting objects in scene (OWL-ViT)...")

@@ -17,8 +17,8 @@ install:
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
-# Run full pipeline: align → encode → analyze
-all: align encode analyze
+# Run full pipeline: align → encode → owl → analyze
+all: align encode owl analyze
 
 # Align all episodes (raw data → aligned/*.npz)
 align:
@@ -31,6 +31,14 @@ align-one episode:
 # Encode all aligned episodes (aligned/*.npz → encoded/*.npz)
 encode:
     {{python}} code/encode.py aligned/
+
+# Run OWL-ViT object detection on all real-world episodes (→ owl/*.npz)
+owl:
+    {{python}} code/owl_detect.py
+
+# Run OWL-ViT for a single episode by name, e.g: just owl-one appleInFridge1
+owl-one episode:
+    {{python}} code/owl_detect.py {{episode}}
 
 # Analyze all encoded episodes (encoded/*.npz → analysis/)
 analyze:
