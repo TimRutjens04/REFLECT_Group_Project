@@ -3,7 +3,7 @@
 
 set dotenv-load := true
 
-python := "poetry run python3"
+python := "uv run python3"
 
 # List available recipes
 default:

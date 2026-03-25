@@ -39,14 +39,33 @@ import json
 import os
 import sys
 import warnings
+from pathlib import Path
 
 import cv2
 import librosa
 import numpy as np
 from tqdm import tqdm
 
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "aligned"))
+
+def find_datasets_root(start: Path) -> Path:
+    """
+    Locate the datasets root directory (the parent folder of real_data/sim_data).
+    Searches upward from `start` for a sibling folder named `datasets`.
+    """
+    for parent in [start, *start.parents]:
+        candidate = parent / "datasets"
+        if candidate.is_dir() and (candidate / "real_data").is_dir():
+            return candidate
+    raise FileNotFoundError(
+        "Could not find datasets root containing real_data/. "
+        "Expected a ../datasets-style layout."
+    )
+
+
+DATASETS_ROOT = find_datasets_root(Path(__file__).resolve())
+SIM_DATA_DIR = DATASETS_ROOT / "sim_data"
+REAL_DATA_DIR = DATASETS_ROOT / "real_data"
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "aligned"
 
 
 # ---------------------------------------------------------------------------
@@ -259,10 +278,11 @@ def align_sim_episode(episode_dir: str, output_dir: str) -> str:
 # Real-world episode alignment (putFruitsBowl)
 # ---------------------------------------------------------------------------
 
-def load_tasks_real_world(data_dir: str) -> dict:
+def load_tasks_real_world(data_dir: Path | str) -> dict:
     """Load tasks_real_world.json keyed by general_folder_name."""
-    path = os.path.join(data_dir, "tasks_real_world.json")
-    with open(path) as f:
+    data_dir = Path(data_dir)
+    path = data_dir / "tasks_real_world.json"
+    with path.open() as f:
         raw = json.load(f)
     by_folder = {}
     for entry in raw.values():
@@ -332,20 +352,19 @@ SIM_TASKS = ["boilWater", "makeSalad"]
 
 def iter_sim_episodes(task_name: str):
     """Yield episode dirs nested inside data/<task_name>/."""
-    task_dir = os.path.join(DATA_DIR, task_name)
-    if not os.path.isdir(task_dir):
+    task_dir = SIM_DATA_DIR / task_name
+    if not task_dir.is_dir():
         return
-    for ep in sorted(os.listdir(task_dir)):
-        ep_dir = os.path.join(task_dir, ep)
-        if os.path.isdir(ep_dir) and not ep.startswith("."):
-            yield ep_dir
+    for ep_dir in sorted(task_dir.iterdir()):
+        if ep_dir.is_dir() and not ep_dir.name.startswith("."):
+            yield str(ep_dir)
 
 
 def iter_real_episodes(tasks_meta: dict):
     """
     Yield (episode_dir, meta) for every real-world episode in tasks_real_world.json
-    whose general_folder_name exists as a top-level directory in DATA_DIR.
-    Also handles the legacy nested layout (data/<task>/<episode>/).
+    whose general_folder_name exists as a top-level directory in REAL_DATA_DIR.
+    Also handles the legacy nested layout (real_data/<task>/<episode>/).
     """
     seen: set[str] = set()
 
@@ -354,29 +373,30 @@ def iter_real_episodes(tasks_meta: dict):
         folder = meta.get("general_folder_name", "")
         if not folder:
             continue
-        ep_dir = os.path.join(DATA_DIR, folder)
-        if os.path.isdir(ep_dir) and folder not in seen:
+        ep_dir = REAL_DATA_DIR / folder
+        if ep_dir.is_dir() and folder not in seen:
             seen.add(folder)
-            yield ep_dir
+            yield str(ep_dir)
 
     # Legacy: nested dirs inside task folders that have a videos/ subdirectory
-    # (e.g. data/putFruitsBowl/putFruitsBowl2/)
-    for entry in sorted(os.listdir(DATA_DIR)):
-        task_dir = os.path.join(DATA_DIR, entry)
-        if not os.path.isdir(task_dir) or entry.startswith("."):
+    # (e.g. real_data/putFruitsBowl/putFruitsBowl2/)
+    for task_dir in sorted(REAL_DATA_DIR.iterdir()):
+        if not task_dir.is_dir() or task_dir.name.startswith("."):
             continue
-        for ep in sorted(os.listdir(task_dir)):
-            ep_dir = os.path.join(task_dir, ep)
-            if (os.path.isdir(ep_dir)
-                    and not ep.startswith(".")
-                    and os.path.isdir(os.path.join(ep_dir, "videos"))
-                    and ep not in seen):
+        for ep_dir in sorted(task_dir.iterdir()):
+            ep = ep_dir.name
+            if (
+                ep_dir.is_dir()
+                and not ep.startswith(".")
+                and (ep_dir / "videos").is_dir()
+                and ep not in seen
+            ):
                 seen.add(ep)
-                yield ep_dir
+                yield str(ep_dir)
 
 
 def main():
-    tasks_meta = load_tasks_real_world(DATA_DIR)
+    tasks_meta = load_tasks_real_world(str(DATASETS_ROOT))
 
     # --- Sim episodes ---
     sim_episodes = [ep for task in SIM_TASKS for ep in iter_sim_episodes(task)]
@@ -407,13 +427,21 @@ if __name__ == "__main__":
     # Allow running on a single episode for testing:
     #   python align.py boilWater/boilWater-1
     if len(sys.argv) == 2:
-        ep_path = os.path.join(DATA_DIR, sys.argv[1])
-        task = os.path.basename(os.path.dirname(ep_path))
-        tasks_meta = load_tasks_real_world(DATA_DIR)
+        ep_path = Path(sys.argv[1])
+        if not ep_path.is_absolute():
+            candidates = [
+                REAL_DATA_DIR / ep_path,
+                SIM_DATA_DIR / ep_path,
+                DATASETS_ROOT / ep_path,
+            ]
+            ep_path = next((c for c in candidates if c.exists()), DATASETS_ROOT / ep_path)
+
+        task = ep_path.parent.name
+        tasks_meta = load_tasks_real_world(str(DATASETS_ROOT))
         if task in SIM_TASKS:
-            out = align_sim_episode(ep_path, OUTPUT_DIR)
+            out = align_sim_episode(str(ep_path), str(OUTPUT_DIR))
         else:
-            out = align_real_episode(ep_path, OUTPUT_DIR, tasks_meta)
+            out = align_real_episode(str(ep_path), str(OUTPUT_DIR), tasks_meta)
         print(f"Saved: {out}")
     else:
         main()

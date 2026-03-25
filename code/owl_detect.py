@@ -26,9 +26,9 @@ Usage:
 """
 
 import json
-import os
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -36,18 +36,21 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import Owlv2ForObjectDetection, Owlv2Processor
 
-ROOT        = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-ALIGNED_DIR = os.path.join(ROOT, "aligned")
-OWL_DIR     = os.path.join(ROOT, "owl")
-TASKS_JSON  = os.path.join(ROOT, "data", "tasks_real_world.json")
+ROOT        = Path(__file__).resolve().parent.parent
+ALIGNED_DIR = ROOT / "aligned"
+OWL_DIR     = ROOT / "owl"
+TASKS_JSON  = Path("/home/coder/datasets") / "tasks_real_world.json"
 MODEL_ID    = "google/owlv2-base-patch16"
 THRESHOLD      = 0.10
 MAX_ALIASES    = 5
 MAX_SPIKE_FRAMES = 8
 FAILURE_WINDOW   = 10   # must match gui/localization.py
 
-DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
-
+DEVICE = (
+    "cuda" if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available()
+    else "cpu"
+)
 
 # ── WordNet alias expansion (same logic as gui/localization.py) ──────────────
 
@@ -121,13 +124,12 @@ def detect_episode(episode_id: str, object_list: list[str],
     Samples: dense ±FAILURE_WINDOW around each failure + up to MAX_SPIKE_FRAMES
     high-motion frames. Mirrors the sampling in gui/localization.py.
     """
-    aligned_path = os.path.join(ALIGNED_DIR, f"{episode_id}.npz")
-    encoded_path = os.path.join(aligned_path.replace("aligned/", "encoded/"))
+    aligned_path = ALIGNED_DIR / f"{episode_id}.npz"
     # frame_deltas need the visual embeddings; fall back to raw frame diff if absent
-    encoded_path = os.path.join(os.path.dirname(ALIGNED_DIR), "encoded", f"{episode_id}.npz")
-    out_path     = os.path.join(OWL_DIR, f"{episode_id}.npz")
+    encoded_path = ROOT / "encoded" / f"{episode_id}.npz"
+    out_path     = OWL_DIR / f"{episode_id}.npz"
 
-    if not os.path.exists(aligned_path):
+    if not aligned_path.exists():
         print(f"  [skip] aligned file not found: {aligned_path}")
         return
 
@@ -138,7 +140,7 @@ def detect_episode(episode_id: str, object_list: list[str],
     n_obj          = len(object_list)
 
     # Compute frame_deltas from encoded embeddings (same as GUI) or fall back to zeros
-    if os.path.exists(encoded_path):
+    if encoded_path.exists():
         enc = np.load(encoded_path, allow_pickle=False)
         vis = enc["visual_embeddings"].astype(np.float32)
         frame_deltas = np.zeros(n, dtype=np.float32)
@@ -221,10 +223,10 @@ def detect_episode(episode_id: str, object_list: list[str],
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    os.makedirs(OWL_DIR, exist_ok=True)
+    OWL_DIR.mkdir(parents=True, exist_ok=True)
 
     # Load task metadata — only real-world episodes have object lists
-    if not os.path.exists(TASKS_JSON):
+    if not TASKS_JSON.exists():
         print(f"ERROR: {TASKS_JSON} not found")
         sys.exit(1)
     with open(TASKS_JSON) as f:
@@ -239,7 +241,7 @@ def main():
         episodes = sorted(
             ep for ep in meta
             if meta[ep].get("object_list")
-            and os.path.exists(os.path.join(ALIGNED_DIR, f"{ep}.npz"))
+            and (ALIGNED_DIR / f"{ep}.npz").exists()
         )
 
     print(f"OWL-ViT detection: {len(episodes)} episode(s)  device={DEVICE}")
@@ -250,8 +252,8 @@ def main():
 
     skipped = 0
     for ep in episodes:
-        out_path = os.path.join(OWL_DIR, f"{ep}.npz")
-        if os.path.exists(out_path):
+        out_path = OWL_DIR / f"{ep}.npz"
+        if out_path.exists():
             print(f"  [skip] {ep} — already computed")
             skipped += 1
             continue
