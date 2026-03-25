@@ -7,7 +7,7 @@ import streamlit as st
 
 from .attention import compute_attention_maps, draw_object_box, overlay_attention
 from .config import ROOT
-from .data import list_episodes, load_episode, load_task_metadata
+from .data import list_episodes, load_episode, load_sim_task_meta, load_task_metadata
 from .localization import active_objects, compute_scene_graph, load_precomputed_owl
 from .logger import log
 from .models import load_clip_model, load_owlvit_model
@@ -244,8 +244,8 @@ def _render_object_localization_section(cur_objects, attn_maps, idx: int,
         _export_button(fig_sg, episode_id, f"localization_f{idx:04d}")
         plt.close(fig_sg)
     elif attn_maps is not None and not object_list:
-        st.info("No object list found for this episode in tasks_real_world.json — "
-                "scene graph is only available for real-world episodes.")
+        st.info("No object list found for this episode — "
+                "add an object_list to the episode's task.json to enable the scene graph.")
 
 
 def main():
@@ -271,7 +271,7 @@ def main():
     n          = len(data["frames"])
     timestamps = data["timestamps"]
 
-    task_meta   = load_task_metadata().get(episode_id)
+    task_meta = load_task_metadata().get(episode_id) or load_sim_task_meta(episode_id)
     object_list = task_meta.get("object_list", []) if task_meta else []
     actions     = task_meta.get("actions", [])     if task_meta else []
 

@@ -32,13 +32,21 @@ align-one episode:
 encode:
     {{python}} code/encode.py aligned/
 
-# Run OWL-ViT object detection on all real-world episodes (→ owl/*.npz)
+# Run OWL-ViT object detection on all episodes (→ owl/*.npz)
 owl:
     {{python}} code/owl_detect.py
 
 # Run OWL-ViT for a single episode by name, e.g: just owl-one appleInFridge1
 owl-one episode:
     {{python}} code/owl_detect.py {{episode}}
+
+# Force-rerun OWL-ViT on all episodes, overwriting existing results
+owl-force:
+    {{python}} code/owl_detect.py --force
+
+# Force-rerun OWL-ViT for a single episode, e.g: just owl-force-one appleInFridge1
+owl-force-one episode:
+    {{python}} code/owl_detect.py {{episode}} --force
 
 # Analyze all encoded episodes (encoded/*.npz → analysis/)
 analyze:

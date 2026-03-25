@@ -111,21 +111,74 @@ def _owl_npz_path(episode_id: str) -> str:
 
 
 def _object_list_for(episode_id: str) -> list[str]:
-    """Look up the object_list for an episode from tasks_real_world.json."""
-    if not os.path.exists(TASKS_JSON):
-        return []
-    with open(TASKS_JSON) as f:
-        raw = json.load(f)
-    meta = {v["general_folder_name"]: v for v in raw.values()}
-    return meta.get(episode_id, {}).get("object_list", [])
+    """
+    Look up the object_list for an episode.
+    Real-world episodes: tasks_real_world.json (central file).
+    Sim episodes (boilWater-N, makeSalad-N): per-episode task.json.
+    """
+    # Try real-world metadata first
+    if os.path.exists(TASKS_JSON):
+        with open(TASKS_JSON) as f:
+            raw = json.load(f)
+        meta = {v["general_folder_name"]: v for v in raw.values()}
+        obj_list = meta.get(episode_id, {}).get("object_list", [])
+        if obj_list:
+            return obj_list
+
+    # Fall back to per-episode task.json (sim episodes)
+    import re
+    task_name = re.sub(r"-\d+$", "", episode_id)
+    sim_json = os.path.join(os.path.dirname(TASKS_JSON), task_name, episode_id, "task.json")
+    if os.path.exists(sim_json):
+        with open(sim_json) as f:
+            return json.load(f).get("object_list", [])
+
+    return []
+
+
+def _temporal_softmax(scores: np.ndarray, floor: float) -> np.ndarray:
+    """
+    Compute temporal softmax weights for OWL-ViT scores.
+
+    For each object (column), scores below `floor` are zeroed out, then softmax
+    is applied over the M sampled frames (axis 0).  Objects that never exceeded
+    the floor receive an all-zero column so they are never shown as detected.
+
+    Args:
+        scores: (M, n_obj) raw OWL-ViT confidence scores
+        floor:  minimum raw score to be considered a real detection
+
+    Returns:
+        weights: (M, n_obj) temporal weights in [0, 1];
+                 columns sum to 1 for ever-detected objects, 0 otherwise.
+    """
+    floored      = np.where(scores >= floor, scores, 0.0)          # (M, n_obj)
+    ever_detected = floored.max(axis=0) >= floor                    # (n_obj,)
+
+    # Numerically-stable softmax per object; use dummy max=1 for never-detected
+    # columns to avoid division by zero (they get zeroed out afterwards).
+    max_s  = np.where(ever_detected, floored.max(axis=0, keepdims=True), 1.0)
+    exp_s  = np.exp(floored - max_s)
+    weights = exp_s / (exp_s.sum(axis=0, keepdims=True) + 1e-12)
+    weights[:, ~ever_detected] = 0.0
+    return weights
 
 
 @st.cache_data(show_spinner="Loading pre-computed OWL-ViT detections...")
 def load_precomputed_owl(episode_id: str) -> dict[int, list[dict]] | None:
     """
     Load pre-computed OWL-ViT detections from owl/<episode_id>.npz.
-    Returns a snapshots dict (same format as compute_scene_graph) covering
-    ALL frames, or None if the file does not exist.
+
+    The `score` field uses a temporally-smoothed value: per-object softmax over
+    all sampled frames (raw scores below OWLVIT_THRESHOLD are floored to 0
+    first).  This smooths display confidence without affecting which objects are
+    shown or where their boxes appear.
+
+    `detected` and box/position fields come directly from the raw npz data so
+    that objects only appear when OWL-ViT actually found them at that frame.
+
+    Returns a snapshots dict (same format as compute_scene_graph), or None if
+    the npz file does not exist.
     """
     path = _owl_npz_path(episode_id)
     if not os.path.exists(path):
@@ -136,29 +189,40 @@ def load_precomputed_owl(episode_id: str) -> dict[int, list[dict]] | None:
         return None
 
     d              = np.load(path, allow_pickle=False)
-    sample_indices = d["sample_indices"].tolist()   # [frame_idx, ...]
-    scores         = d["scores"]                    # (M, n_obj)
+    sample_indices = d["sample_indices"].tolist()   # [frame_idx, ...]  length M
+    raw_scores     = d["scores"]                    # (M, n_obj)
     detected       = d["detected"]                  # (M, n_obj)
     cx             = d["cx_norm"]                   # (M, n_obj)
     cy             = d["cy_norm"]                   # (M, n_obj)
     boxes_np       = d["boxes"]                     # (M, n_obj, 4)
+    # track_iou / track_ids absent in npz files computed before tracking was added
+    n_obj = len(object_list)
+    track_iou = d["track_iou"] if "track_iou" in d \
+                else np.zeros((len(sample_indices), n_obj), dtype=np.float32)
+    track_ids = d["track_ids"] if "track_ids" in d \
+                else np.tile(np.arange(n_obj, dtype=np.int32),
+                             (len(sample_indices), 1))
+
+    # Temporal softmax over raw scores — used only for the score display field
+    t_weights = _temporal_softmax(raw_scores, OWLVIT_THRESHOLD)   # (M, n_obj)
 
     snapshots: dict[int, list[dict]] = {}
     for row, frame_idx in enumerate(sample_indices):
         objs = []
         for i, name in enumerate(object_list):
-            s   = float(scores[row, i])
             det = bool(detected[row, i])
             b   = boxes_np[row, i]
             box = [int(b[0]), int(b[1]), int(b[2]), int(b[3])] \
                   if det and not np.any(np.isnan(b)) else None
             objs.append({
-                "name":     name,
-                "score":    s,
-                "detected": det,
-                "box":      box,
-                "cx_norm":  float(cx[row, i]),
-                "cy_norm":  float(cy[row, i]),
+                "name":      name,
+                "score":     float(t_weights[row, i]),   # temporally smoothed
+                "detected":  det,                         # raw threshold
+                "box":       box,
+                "cx_norm":   float(cx[row, i]),
+                "cy_norm":   float(cy[row, i]),
+                "track_id":  int(track_ids[row, i]),
+                "track_iou": float(track_iou[row, i]),   # 0 = first detection or miss
             })
         snapshots[frame_idx] = objs
 

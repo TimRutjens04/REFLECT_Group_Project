@@ -72,3 +72,9 @@ logs/
 .env
 *.env.*
 secrets.json
+
+# Workspace
+*.code-workspace
+
+# Result visuals
+results/

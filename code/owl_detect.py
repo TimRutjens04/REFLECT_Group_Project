@@ -112,6 +112,20 @@ def _select_sample_frames(frame_deltas: np.ndarray,
     return sorted(must_include | set(spike_frames[:MAX_SPIKE_FRAMES]))
 
 
+# ── IoU helper ───────────────────────────────────────────────────────────────
+
+def _iou(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute IoU between two [x1, y1, x2, y2] boxes."""
+    ix1 = max(a[0], b[0]);  iy1 = max(a[1], b[1])
+    ix2 = min(a[2], b[2]);  iy2 = min(a[3], b[3])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    if inter == 0.0:
+        return 0.0
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    return inter / (area_a + area_b - inter + 1e-6)
+
+
 # ── Core detection ────────────────────────────────────────────────────────────
 
 def detect_episode(episode_id: str, object_list: list[str],
@@ -161,11 +175,18 @@ def detect_episode(episode_id: str, object_list: list[str],
     texts = [all_prompts]
 
     # Output arrays — one row per sampled frame (M, not N)
-    scores   = np.zeros((m, n_obj),    dtype=np.float32)
-    detected = np.zeros((m, n_obj),    dtype=bool)
-    cx_norm  = np.full( (m, n_obj),    0.5, dtype=np.float32)
-    cy_norm  = np.full( (m, n_obj),    0.5, dtype=np.float32)
-    boxes    = np.full( (m, n_obj, 4), np.nan, dtype=np.float32)
+    scores    = np.zeros((m, n_obj),    dtype=np.float32)
+    detected  = np.zeros((m, n_obj),    dtype=bool)
+    cx_norm   = np.full( (m, n_obj),    0.5,    dtype=np.float32)
+    cy_norm   = np.full( (m, n_obj),    0.5,    dtype=np.float32)
+    boxes     = np.full( (m, n_obj, 4), np.nan, dtype=np.float32)
+    track_iou = np.zeros((m, n_obj),    dtype=np.float32)  # IoU vs previous box
+    # track_ids: for named single-instance objects the index IS the persistent id,
+    # stored explicitly so consumers can rely on it without re-deriving.
+    track_ids = np.tile(np.arange(n_obj, dtype=np.int32), (m, 1))  # (M, n_obj)
+
+    # Per-object tracker state: last confirmed box (NaN = never seen)
+    track_box = np.full((n_obj, 4), np.nan, dtype=np.float32)
 
     t0 = time.perf_counter()
     for row, frame_idx in enumerate(tqdm(sample_indices, desc=episode_id, leave=False)):
@@ -201,9 +222,14 @@ def detect_episode(episode_id: str, object_list: list[str],
                 detected[row, i] = s >= THRESHOLD
                 if s >= THRESHOLD:
                     x1, y1, x2, y2 = b
-                    boxes[row, i]   = [x1, y1, x2, y2]
-                    cx_norm[row, i] = ((x1 + x2) / 2) / w
-                    cy_norm[row, i] = ((y1 + y2) / 2) / h
+                    new_box = np.array([x1, y1, x2, y2], dtype=np.float32)
+                    boxes[row, i]      = new_box
+                    cx_norm[row, i]    = ((x1 + x2) / 2) / w
+                    cy_norm[row, i]    = ((y1 + y2) / 2) / h
+                    # IoU against last confirmed box (0 on first detection)
+                    if not np.any(np.isnan(track_box[i])):
+                        track_iou[row, i] = _iou(track_box[i], new_box)
+                    track_box[i] = new_box   # update track state
 
     np.savez_compressed(
         out_path,
@@ -213,6 +239,8 @@ def detect_episode(episode_id: str, object_list: list[str],
         cx_norm=cx_norm,
         cy_norm=cy_norm,
         boxes=boxes,
+        track_ids=track_ids,
+        track_iou=track_iou,
     )
     print(f"  saved {out_path}  ({m}/{n} frames sampled, {n_obj} objects, "
           f"{time.perf_counter()-t0:.1f}s)")
@@ -220,29 +248,53 @@ def detect_episode(episode_id: str, object_list: list[str],
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+import re as _re
+
+
+def _object_list_for(episode_id: str) -> list[str]:
+    """
+    Return the object_list for any episode.
+    Real-world: tasks_real_world.json.
+    Sim (boilWater-N, makeSalad-N): per-episode task.json.
+    """
+    # Real-world central metadata
+    if os.path.exists(TASKS_JSON):
+        with open(TASKS_JSON) as f:
+            raw = json.load(f)
+        obj_list = {v["general_folder_name"]: v for v in raw.values()} \
+                       .get(episode_id, {}).get("object_list", [])
+        if obj_list:
+            return obj_list
+
+    # Per-episode task.json for sim episodes
+    task_name = _re.sub(r"-\d+$", "", episode_id)
+    sim_json = os.path.join(os.path.dirname(TASKS_JSON), task_name, episode_id, "task.json")
+    if os.path.exists(sim_json):
+        with open(sim_json) as f:
+            return json.load(f).get("object_list", [])
+
+    return []
+
+
 def main():
     os.makedirs(OWL_DIR, exist_ok=True)
 
-    # Load task metadata — only real-world episodes have object lists
-    if not os.path.exists(TASKS_JSON):
-        print(f"ERROR: {TASKS_JSON} not found")
-        sys.exit(1)
-    with open(TASKS_JSON) as f:
-        tasks_raw = json.load(f)
-    meta = {v["general_folder_name"]: v for v in tasks_raw.values()}
+    # Parse args: optional episode name and/or --force flag
+    args   = sys.argv[1:]
+    force  = "--force" in args
+    args   = [a for a in args if a != "--force"]
+    target = args[0] if args else None
 
-    # Determine which episodes to process
-    target = sys.argv[1] if len(sys.argv) > 1 else None
     if target:
         episodes = [target]
     else:
         episodes = sorted(
-            ep for ep in meta
-            if meta[ep].get("object_list")
-            and os.path.exists(os.path.join(ALIGNED_DIR, f"{ep}.npz"))
+            f[:-4] for f in os.listdir(ALIGNED_DIR)
+            if f.endswith(".npz") and _object_list_for(f[:-4])
         )
 
-    print(f"OWL-ViT detection: {len(episodes)} episode(s)  device={DEVICE}")
+    print(f"OWL-ViT detection: {len(episodes)} episode(s)  device={DEVICE}"
+          + ("  [force]" if force else ""))
     print(f"Loading {MODEL_ID}...")
     processor = Owlv2Processor.from_pretrained(MODEL_ID)
     model     = Owlv2ForObjectDetection.from_pretrained(MODEL_ID).to(DEVICE)
@@ -251,11 +303,11 @@ def main():
     skipped = 0
     for ep in episodes:
         out_path = os.path.join(OWL_DIR, f"{ep}.npz")
-        if os.path.exists(out_path):
+        if os.path.exists(out_path) and not force:
             print(f"  [skip] {ep} — already computed")
             skipped += 1
             continue
-        obj_list = meta.get(ep, {}).get("object_list", [])
+        obj_list = _object_list_for(ep)
         if not obj_list:
             print(f"  [skip] {ep} — no object_list in metadata")
             skipped += 1
