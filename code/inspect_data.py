@@ -5,7 +5,6 @@ Results should be documented in a comment block at the top of align.py.
 
 import json
 import os
-import sys
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
