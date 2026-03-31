@@ -5,7 +5,7 @@ Encodes robot episode video and audio into compact state representations using p
 
 ## Project structure
 
-```
+```bash
 code/               pipeline scripts (align → encode → analyze)
 notebooks/          exploration.ipynb — narrative analysis with all figures
 docs/               research plan and project deliverables
@@ -130,7 +130,12 @@ audio_embeddings     (N, 512)   float32 — WAV2CLIP, L2-normalized
 failure_labels       (N,)       bool
 fps_base, audio_sr
 ```
-
 ---
+### Branching
+
+When creating a new branch please adhere to the following structure; FirstNameInitial+SecondNameInitial_BranchPurpose
+So f.e.: TR_Project_Setup 
+Please keep it as specific as possible so not TR_Work TR_BugFix
+
 
 Key metric results are written to `analysis/metrics.json` after each `just analyze` run.
