@@ -1,4 +1,6 @@
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 
 plt.switch_backend("Agg")  # avoid macOS AppKit crash in Streamlit subprocess
@@ -104,6 +106,113 @@ def plot_audio_waveform(audio_windows: np.ndarray, audio_sr: int, idx: int) -> p
     ax2.set_title("Audio energy over episode", color="white", fontsize=9)
 
     fig.tight_layout(pad=0.8)
+    return fig
+
+
+def plot_gt_scene_graph(graphs: list[dict], idx: int) -> plt.Figure:
+    """
+    Render the ground-truth scene graph for a single step (frame index idx).
+    Uses a fixed layout computed from all steps so positions are stable.
+    Designed for the GUI left column (compact, dark theme).
+    """
+    from scene_graph import _compute_layout, _node_color  # type: ignore[import]
+
+    # Colors
+    C_HELD    = "#f0c040"
+    C_SURFACE = "#2e2e3e"
+
+    graph = graphs[idx]
+    layout = _compute_layout(graphs)
+
+    fig, ax = plt.subplots(figsize=(4.0, 3.6))
+    fig.patch.set_facecolor(DARK_BG)
+    ax.set_facecolor(DARK_BG)
+    ax.set_xlim(-0.05, 1.15)
+    ax.set_ylim(-0.08, 1.05)
+    ax.axis("off")
+
+    failure = graph["failure"]
+    title_color = "#ff6666" if failure else "white"
+    ax.set_title(
+        f"GT scene graph — step {graph['step']}  {'⚠' if failure else ''}",
+        color=title_color, fontsize=8, pad=4,
+    )
+
+    # Tier separator lines
+    for y_sep in (0.35, 0.70):
+        ax.axhline(y_sep, color=GRID_COL, lw=0.8, linestyle="--", zorder=0)
+
+    # Build graph for this step
+    G = nx.DiGraph()
+    node_by_id = {n["id"]: n for n in graph["nodes"]}
+    for n in graph["nodes"]:
+        if n["id"] in layout:
+            G.add_node(n["id"])
+    for e in graph["edges"]:
+        if e["src"] in layout and e["dst"] in layout:
+            G.add_edge(e["src"], e["dst"], rel=e["rel"])
+
+    pos = {nid: layout[nid] for nid in G.nodes if nid in layout}
+
+    # Edges
+    holds_edges = [(u, v) for u, v, d in G.edges(data=True) if d["rel"] == "holds"]
+    onin_edges  = [(u, v) for u, v, d in G.edges(data=True) if d["rel"] == "on/in"]
+
+    nx.draw_networkx_edges(G, pos, edgelist=holds_edges, ax=ax,
+                           edge_color=C_HELD, style="dashed", width=1.8, alpha=0.85,
+                           arrows=True, arrowsize=12,
+                           connectionstyle="arc3,rad=0.1")
+    nx.draw_networkx_edges(G, pos, edgelist=onin_edges, ax=ax,
+                           edge_color="#555566", style="solid", width=1.2, alpha=0.7,
+                           arrows=True, arrowsize=10)
+
+    edge_labels = {(u, v): d["rel"] for u, v, d in G.edges(data=True)}
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, ax=ax,
+                                 font_size=5, font_color="#888899",
+                                 bbox=dict(facecolor=DARK_BG, edgecolor="none", pad=1))
+
+    # Nodes
+    for nid in G.nodes:
+        n = node_by_id[nid]
+        x, y = pos[nid]
+        color = _node_color(n)
+        ec = "#ff4444" if failure and n["tier"] == "object" else "white"
+        lw = 1.8 if failure and n["tier"] == "object" else 0.6
+
+        circle = plt.Circle((x, y), 0.055, color=color, ec=ec, lw=lw,
+                             zorder=3, alpha=0.95)
+        ax.add_patch(circle)
+
+        short = n["name"] if len(n["name"]) <= 11 else n["name"][:9] + ".."
+        ax.text(x, y, short, ha="center", va="center",
+                fontsize=5.5, color="white", fontweight="bold", zorder=4)
+
+        badges = []
+        if n["is_picked_up"]:  badges.append("held")
+        if n["is_toggled"]:    badges.append("on")
+        if n["is_filled"]:     badges.append("filled")
+        if n["is_broken"]:     badges.append("broken")
+        if badges:
+            ax.text(x, y - 0.082, " · ".join(badges), ha="center", va="top",
+                    fontsize=5, color="#cccccc", zorder=4)
+
+    # Compact legend (right margin)
+    from scene_graph import C_AGENT, C_NORMAL, C_HELD as _HELD, C_TOGGLED, C_FILLED, C_BROKEN  # type: ignore[import]
+    patches = [
+        mpatches.Patch(color=C_AGENT,   label="Agent"),
+        mpatches.Patch(color=C_NORMAL,  label="Normal"),
+        mpatches.Patch(color=_HELD,     label="Held"),
+        mpatches.Patch(color=C_TOGGLED, label="On"),
+        mpatches.Patch(color=C_FILLED,  label="Filled"),
+        mpatches.Patch(color=C_BROKEN,  label="Broken"),
+        mpatches.Patch(color=C_SURFACE, label="Surface"),
+    ]
+    ax.legend(handles=patches, loc="lower left",
+              facecolor=DARK_BG, labelcolor="white",
+              fontsize=5.5, framealpha=0.85)
+
+    ax.set_xlabel(f"Action: {graph['last_action']}", color="#888888", fontsize=6)
+    fig.tight_layout(pad=0.4)
     return fig
 
 

@@ -7,12 +7,13 @@ import streamlit as st
 
 from .attention import compute_attention_maps, draw_object_box, overlay_attention
 from .config import ROOT
-from .data import list_episodes, load_episode, load_sim_task_meta, load_task_metadata
+from .data import list_episodes, load_episode, load_gt_scene_graphs, load_sim_task_meta, load_task_metadata
 from .localization import active_objects, compute_scene_graph, load_precomputed_owl
 from .logger import log
 from .models import load_clip_model, load_owlvit_model
 from .plots import (
     plot_audio_waveform,
+    plot_gt_scene_graph,
     plot_inline_scene_graph,
     plot_pca,
     plot_scene_graph,
@@ -311,11 +312,26 @@ def main():
     # cur_objects is dict[frame_idx → object_list]; pick the most recent one ≤ idx
     cur_objects = active_objects(cur_objects, idx) if cur_objects else None
 
+    # ── Ground-truth scene graphs (sim episodes only) ────────────────────────
+    gt_graphs = load_gt_scene_graphs(episode_id)
+
     # ── Main layout ──────────────────────────────────────────────────────────
     col_frame, col_plots = st.columns([2, 3], gap="medium")
 
     with col_frame:
         _render_frame_col(data, idx, n, timestamps, attn_maps, attn_alpha, cur_objects)
+
+        # GT scene graph (sim only — live, synced with scrubber)
+        if gt_graphs is not None and idx < len(gt_graphs):
+            st.divider()
+            fig_gt = plot_gt_scene_graph(gt_graphs, idx)
+            st.pyplot(fig_gt, use_container_width=True)
+            _export_button(fig_gt, episode_id, f"gt_scene_graph_f{idx:04d}")
+            plt.close(fig_gt)
+            st.caption(
+                "Ground-truth scene graph from simulator state (step pickles). "
+                "Nodes = task-relevant objects. Edges = containment / held-by."
+            )
 
     with col_plots:
         fig_sig = plot_signals(
@@ -341,6 +357,25 @@ def main():
         data["frames"], actions,
         object_list, episode_id,
     )
+
+    # ── GT scene graph video (sim only) ─────────────────────────────────────
+    if gt_graphs is not None:
+        video_path = os.path.join(ROOT, "scene_graphs", f"{episode_id}.mp4")
+        if os.path.exists(video_path):
+            st.divider()
+            st.markdown("#### Ground-truth scene graph — full video")
+            st.caption(
+                "Pre-rendered video: RGB frame + scene graph per step. "
+                "Generate with `poetry run python3 code/scene_graph.py " + episode_id + "`"
+            )
+            with open(video_path, "rb") as vf:
+                st.video(vf.read())
+        else:
+            st.divider()
+            st.info(
+                f"Scene graph video not yet generated for **{episode_id}**. "
+                f"Run: `poetry run python3 code/scene_graph.py {episode_id}`"
+            )
 
     # ── Playback loop ────────────────────────────────────────────────────────
     if st.session_state.get("playing", False):

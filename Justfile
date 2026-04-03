@@ -52,6 +52,14 @@ owl-force-one episode:
 analyze:
     {{python}} code/analyze.py encoded/
 
+# Generate GT scene graph videos for all sim episodes (→ scene_graphs/*.mp4)
+scene-graph:
+    {{python}} code/scene_graph.py --all
+
+# Generate GT scene graph video for a single sim episode, e.g: just scene-graph-one boilWater-1
+scene-graph-one episode:
+    {{python}} code/scene_graph.py {{episode}}
+
 # Execute the exploration notebook in-place
 notebook:
     poetry run jupyter nbconvert --to notebook --execute --inplace \

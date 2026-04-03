@@ -96,3 +96,20 @@ def list_episodes() -> list[str]:
     aligned = {f[:-4] for f in os.listdir(ALIGNED_DIR) if f.endswith(".npz")}
     encoded = {f[:-4] for f in os.listdir(ENCODED_DIR) if f.endswith(".npz")}
     return sorted(aligned & encoded)
+
+
+@st.cache_data(show_spinner="Loading ground-truth scene graphs…")
+def load_gt_scene_graphs(episode_id: str) -> list[dict] | None:
+    """
+    Extract per-step ground-truth scene graphs from step pickles for sim episodes.
+    Returns a list of graph dicts (one per aligned frame) or None if not available.
+    """
+    import sys
+    src = os.path.join(os.path.dirname(__file__), "..")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    try:
+        from scene_graph import extract_step_graphs
+        return extract_step_graphs(episode_id)
+    except (FileNotFoundError, Exception):
+        return None
