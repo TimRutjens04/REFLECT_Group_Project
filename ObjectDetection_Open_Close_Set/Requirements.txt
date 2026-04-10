@@ -1,0 +1,27 @@
+# Core
+torch>=2.0.0
+torchvision>=0.15.0
+
+# HuggingFace (OWL-ViT)
+transformers>=4.35.0
+accelerate
+huggingface-hub
+
+# Image / Video processing
+opencv-python
+Pillow
+matplotlib
+
+# Utilities
+numpy
+scipy
+tqdm
+
+# For Grounding DINO
+timm
+pycocotools
+
+# Optional (better performance / compatibility)
+einops
+
+

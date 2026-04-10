@@ -1,0 +1,839 @@
+{
+  "task": "boilWater-1",
+  "frame_dir": "Data\\Data\\Sim Data\\boilWater-1\\frames",
+  "num_frames": 27,
+  "expected_detection": {
+    "metal pot": 0.59,
+    "sink": 0.78,
+    "cooking pot": 0.59,
+    "kitchen sink": 0.78,
+    "saucepan": 0.59,
+    "sink basin": 0.78,
+    "container": 0.59,
+    "wash basin": 0.78
+  },
+  "experiments": [
+    {
+      "name": "Experiment 1",
+      "objects": [
+        "metal pot",
+        "sink"
+      ],
+      "thresholds": {
+        "gdino_box_thresh": 0.4,
+        "gdino_text_thresh": 0.4,
+        "yolo_thresh": 0.3,
+        "owl_thresh": 0.1
+      },
+      "models": {
+        "gdino": {
+          "total_time": 314.7035484313965,
+          "avg_time": 11.65568697894061,
+          "metrics": {
+            "metal pot": {
+              "detection_rate": 0.8888888888888888,
+              "avg_conf": 0.8260791997114817,
+              "best": {
+                "frame": "frame_0015.jpg",
+                "score": 0.9317610859870911
+              },
+              "worst_positive": {
+                "frame": "frame_0027.jpg",
+                "score": 0.7124844789505005
+              },
+              "missed_frames": [
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "sink": {
+              "detection_rate": 0.8148148148148148,
+              "avg_conf": 0.5508788160302422,
+              "best": {
+                "frame": "frame_0024.jpg",
+                "score": 0.713646411895752
+              },
+              "worst_positive": {
+                "frame": "frame_0017.jpg",
+                "score": 0.43177035450935364
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        },
+        "yoloe": {
+          "total_time": 14.518310070037842,
+          "avg_time": 0.5377151877791794,
+          "metrics": {
+            "metal pot": {
+              "detection_rate": 0.07407407407407407,
+              "avg_conf": 0.3583490252494812,
+              "best": {
+                "frame": "frame_0030.jpg",
+                "score": 0.39152225852012634
+              },
+              "worst_positive": {
+                "frame": "frame_0026.jpg",
+                "score": 0.32517579197883606
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0027.jpg",
+                "frame_0031.jpg",
+                "frame_0032.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0035.jpg",
+                "frame_0036.jpg",
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0040.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "sink": {
+              "detection_rate": 0.5925925925925926,
+              "avg_conf": 0.4662660025060177,
+              "best": {
+                "frame": "frame_0040.jpg",
+                "score": 0.6830489635467529
+              },
+              "worst_positive": {
+                "frame": "frame_0026.jpg",
+                "score": 0.31053245067596436
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0035.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        },
+        "owlvit": {
+          "total_time": 13.362187147140503,
+          "avg_time": 0.49489582026446305,
+          "metrics": {
+            "metal pot": {
+              "detection_rate": 0.037037037037037035,
+              "avg_conf": 0.1363183856010437,
+              "best": {
+                "frame": "frame_0036.jpg",
+                "score": 0.1363183856010437
+              },
+              "worst_positive": {
+                "frame": "frame_0036.jpg",
+                "score": 0.1363183856010437
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0026.jpg",
+                "frame_0027.jpg",
+                "frame_0030.jpg",
+                "frame_0031.jpg",
+                "frame_0032.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0035.jpg",
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0040.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "sink": {
+              "detection_rate": 0.48148148148148145,
+              "avg_conf": 0.16178223605339342,
+              "best": {
+                "frame": "frame_0039.jpg",
+                "score": 0.18844974040985107
+              },
+              "worst_positive": {
+                "frame": "frame_0021.jpg",
+                "score": 0.10812768340110779
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0038.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Experiment 2",
+      "objects": [
+        "cooking pot",
+        "kitchen sink"
+      ],
+      "thresholds": {
+        "gdino_box_thresh": 0.4,
+        "gdino_text_thresh": 0.4,
+        "yolo_thresh": 0.3,
+        "owl_thresh": 0.1
+      },
+      "models": {
+        "gdino": {
+          "total_time": 310.4143965244293,
+          "avg_time": 11.49682950090479,
+          "metrics": {
+            "cooking pot": {
+              "detection_rate": 0.8888888888888888,
+              "avg_conf": 0.6590190927187601,
+              "best": {
+                "frame": "frame_0016.jpg",
+                "score": 0.7354870438575745
+              },
+              "worst_positive": {
+                "frame": "frame_0040.jpg",
+                "score": 0.5591678619384766
+              },
+              "missed_frames": [
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "kitchen sink": {
+              "detection_rate": 0.8888888888888888,
+              "avg_conf": 0.5578803395231565,
+              "best": {
+                "frame": "frame_0040.jpg",
+                "score": 0.7813015580177307
+              },
+              "worst_positive": {
+                "frame": "frame_0027.jpg",
+                "score": 0.43536376953125
+              },
+              "missed_frames": [
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        },
+        "yoloe": {
+          "total_time": 14.10152530670166,
+          "avg_time": 0.5222787150630245,
+          "metrics": {
+            "cooking pot": {
+              "detection_rate": 0.07407407407407407,
+              "avg_conf": 0.3710164278745651,
+              "best": {
+                "frame": "frame_0025.jpg",
+                "score": 0.42009860277175903
+              },
+              "worst_positive": {
+                "frame": "frame_0030.jpg",
+                "score": 0.3219342529773712
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0024.jpg",
+                "frame_0026.jpg",
+                "frame_0027.jpg",
+                "frame_0031.jpg",
+                "frame_0032.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0035.jpg",
+                "frame_0036.jpg",
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0040.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "kitchen sink": {
+              "detection_rate": 0.3333333333333333,
+              "avg_conf": 0.4267568720711602,
+              "best": {
+                "frame": "frame_0040.jpg",
+                "score": 0.5591503977775574
+              },
+              "worst_positive": {
+                "frame": "frame_0033.jpg",
+                "score": 0.3115084767341614
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0026.jpg",
+                "frame_0027.jpg",
+                "frame_0030.jpg",
+                "frame_0035.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        },
+        "owlvit": {
+          "total_time": 12.106189250946045,
+          "avg_time": 0.44837737966466834,
+          "metrics": {
+            "cooking pot": {
+              "detection_rate": 0.4444444444444444,
+              "avg_conf": 0.14802253991365433,
+              "best": {
+                "frame": "frame_0036.jpg",
+                "score": 0.28777551651000977
+              },
+              "worst_positive": {
+                "frame": "frame_0039.jpg",
+                "score": 0.10619676113128662
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0026.jpg",
+                "frame_0027.jpg",
+                "frame_0038.jpg",
+                "frame_0040.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "kitchen sink": {
+              "detection_rate": 0.48148148148148145,
+              "avg_conf": 0.1645860316661688,
+              "best": {
+                "frame": "frame_0026.jpg",
+                "score": 0.1988840103149414
+              },
+              "worst_positive": {
+                "frame": "frame_0038.jpg",
+                "score": 0.10406489670276642
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Experiment 3",
+      "objects": [
+        "saucepan",
+        "sink basin"
+      ],
+      "thresholds": {
+        "gdino_box_thresh": 0.4,
+        "gdino_text_thresh": 0.4,
+        "yolo_thresh": 0.3,
+        "owl_thresh": 0.1
+      },
+      "models": {
+        "gdino": {
+          "total_time": 315.53036189079285,
+          "avg_time": 11.686309699658993,
+          "metrics": {
+            "saucepan": {
+              "detection_rate": 0.7777777777777778,
+              "avg_conf": 0.6076844178494953,
+              "best": {
+                "frame": "frame_0018.jpg",
+                "score": 0.7481302618980408
+              },
+              "worst_positive": {
+                "frame": "frame_0040.jpg",
+                "score": 0.40053650736808777
+              },
+              "missed_frames": [
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "sink basin": {
+              "detection_rate": 0.8888888888888888,
+              "avg_conf": 0.6194551189740499,
+              "best": {
+                "frame": "frame_0040.jpg",
+                "score": 0.804413378238678
+              },
+              "worst_positive": {
+                "frame": "frame_0035.jpg",
+                "score": 0.452480673789978
+              },
+              "missed_frames": [
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        },
+        "yoloe": {
+          "total_time": 15.117602109909058,
+          "avg_time": 0.559911189255891,
+          "metrics": {
+            "saucepan": {
+              "detection_rate": 0.0,
+              "avg_conf": 0.0,
+              "best": {
+                "frame": "frame_0015.jpg",
+                "score": 0.0
+              },
+              "worst_positive": null,
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0026.jpg",
+                "frame_0027.jpg",
+                "frame_0030.jpg",
+                "frame_0031.jpg",
+                "frame_0032.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0035.jpg",
+                "frame_0036.jpg",
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0040.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "sink basin": {
+              "detection_rate": 0.48148148148148145,
+              "avg_conf": 0.4418034324279198,
+              "best": {
+                "frame": "frame_0032.jpg",
+                "score": 0.711414635181427
+              },
+              "worst_positive": {
+                "frame": "frame_0037.jpg",
+                "score": 0.3120577037334442
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0026.jpg",
+                "frame_0035.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        },
+        "owlvit": {
+          "total_time": 13.446899175643921,
+          "avg_time": 0.4980333028016267,
+          "metrics": {
+            "saucepan": {
+              "detection_rate": 0.037037037037037035,
+              "avg_conf": 0.10156126320362091,
+              "best": {
+                "frame": "frame_0036.jpg",
+                "score": 0.10156126320362091
+              },
+              "worst_positive": {
+                "frame": "frame_0036.jpg",
+                "score": 0.10156126320362091
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0026.jpg",
+                "frame_0027.jpg",
+                "frame_0030.jpg",
+                "frame_0031.jpg",
+                "frame_0032.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0035.jpg",
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0040.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "sink basin": {
+              "detection_rate": 0.5185185185185185,
+              "avg_conf": 0.1301863699087075,
+              "best": {
+                "frame": "frame_0026.jpg",
+                "score": 0.19072872400283813
+              },
+              "worst_positive": {
+                "frame": "frame_0040.jpg",
+                "score": 0.1034948006272316
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0023.jpg",
+                "frame_0032.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0038.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Experiment 4",
+      "objects": [
+        "container",
+        "wash basin"
+      ],
+      "thresholds": {
+        "gdino_box_thresh": 0.4,
+        "gdino_text_thresh": 0.4,
+        "yolo_thresh": 0.3,
+        "owl_thresh": 0.3
+      },
+      "models": {
+        "gdino": {
+          "total_time": 340.5786123275757,
+          "avg_time": 12.614022678799099,
+          "metrics": {
+            "container": {
+              "detection_rate": 0.0,
+              "avg_conf": 0.0,
+              "best": {
+                "frame": "frame_0015.jpg",
+                "score": 0.0
+              },
+              "worst_positive": null,
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0026.jpg",
+                "frame_0027.jpg",
+                "frame_0030.jpg",
+                "frame_0031.jpg",
+                "frame_0032.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0035.jpg",
+                "frame_0036.jpg",
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0040.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "wash basin": {
+              "detection_rate": 1.0,
+              "avg_conf": 0.6163983985229775,
+              "best": {
+                "frame": "frame_0019.jpg",
+                "score": 0.8313923478126526
+              },
+              "worst_positive": {
+                "frame": "frame_0039.jpg",
+                "score": 0.4290628731250763
+              },
+              "missed_frames": []
+            }
+          }
+        },
+        "yoloe": {
+          "total_time": 14.326090097427368,
+          "avg_time": 0.530595929534347,
+          "metrics": {
+            "container": {
+              "detection_rate": 0.0,
+              "avg_conf": 0.0,
+              "best": {
+                "frame": "frame_0015.jpg",
+                "score": 0.0
+              },
+              "worst_positive": null,
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0026.jpg",
+                "frame_0027.jpg",
+                "frame_0030.jpg",
+                "frame_0031.jpg",
+                "frame_0032.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0035.jpg",
+                "frame_0036.jpg",
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0040.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "wash basin": {
+              "detection_rate": 0.5925925925925926,
+              "avg_conf": 0.3934542331844568,
+              "best": {
+                "frame": "frame_0034.jpg",
+                "score": 0.5184537768363953
+              },
+              "worst_positive": {
+                "frame": "frame_0035.jpg",
+                "score": 0.3058669865131378
+              },
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0025.jpg",
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        },
+        "owlvit": {
+          "total_time": 13.237891435623169,
+          "avg_time": 0.4902922753934507,
+          "metrics": {
+            "container": {
+              "detection_rate": 0.0,
+              "avg_conf": 0.0,
+              "best": {
+                "frame": "frame_0015.jpg",
+                "score": 0.0
+              },
+              "worst_positive": null,
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0026.jpg",
+                "frame_0027.jpg",
+                "frame_0030.jpg",
+                "frame_0031.jpg",
+                "frame_0032.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0035.jpg",
+                "frame_0036.jpg",
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0040.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            },
+            "wash basin": {
+              "detection_rate": 0.0,
+              "avg_conf": 0.0,
+              "best": {
+                "frame": "frame_0015.jpg",
+                "score": 0.0
+              },
+              "worst_positive": null,
+              "missed_frames": [
+                "frame_0015.jpg",
+                "frame_0016.jpg",
+                "frame_0017.jpg",
+                "frame_0018.jpg",
+                "frame_0019.jpg",
+                "frame_0020.jpg",
+                "frame_0021.jpg",
+                "frame_0022.jpg",
+                "frame_0023.jpg",
+                "frame_0024.jpg",
+                "frame_0025.jpg",
+                "frame_0026.jpg",
+                "frame_0027.jpg",
+                "frame_0030.jpg",
+                "frame_0031.jpg",
+                "frame_0032.jpg",
+                "frame_0033.jpg",
+                "frame_0034.jpg",
+                "frame_0035.jpg",
+                "frame_0036.jpg",
+                "frame_0037.jpg",
+                "frame_0038.jpg",
+                "frame_0039.jpg",
+                "frame_0040.jpg",
+                "frame_0044.jpg",
+                "frame_0045.jpg",
+                "frame_0046.jpg"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}
