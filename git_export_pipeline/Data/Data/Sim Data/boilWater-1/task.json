@@ -1,0 +1,63 @@
+{
+    "task_idx": 1,
+    "failure_injection": "True",
+    "reps": 1,
+    "name": "boil water",
+    "general_folder_name": "boilWaterR",
+    "scene": "FloorPlan1",
+    "object_list": [
+        "Pot",
+        "Faucet",
+        "StoveBurner",
+        "CounterTop",
+        "Sink"
+    ],
+    "actions": [
+        "(navigate_to_obj, Pot)",
+        "(pick_up, Pot)",
+        "(navigate_to_obj, Sink)",
+        "(put_in, Pot, Sink)",
+        "(toggle_on, Faucet)",
+        "(toggle_off, Faucet)",
+        "(pick_up, Pot)",
+        "(navigate_to_obj, StoveBurner-4)",
+        "(put_on, Pot, StoveBurner-4)",
+        "(toggle_on, StoveBurner-4)"
+    ],
+    "success_condition": "a pot is filled with water, the pot is on top of a stove burner that is turned on.",
+    "specified_missing_steps": [
+        [
+            4,
+            5
+        ],
+        [
+            6
+        ]
+    ],
+    "gt_failure_reason": "Dropped Pot",
+    "gt_failure_step": "00:36",
+    "specific_folder_name": "boilWater/boilWater-1",
+    "unity_name_map": {
+        "CounterTop_2fe78146": "CounterTop-1",
+        "CounterTop_203f0cf4": "CounterTop-2",
+        "CounterTop_978a4b41": "CounterTop-3",
+        "StoveBurner_08a5798f": "StoveBurner-1",
+        "StoveBurner_3397cbe3": "StoveBurner-2",
+        "StoveBurner_a0b460e5": "StoveBurner-3",
+        "StoveBurner_d506dac6": "StoveBurner-4",
+        "Cabinet_07bf9f23": "Cabinet-1",
+        "Cabinet_7d7a3425": "Cabinet-2",
+        "Cabinet_67e9cbea": "Cabinet-3",
+        "Cabinet_b69a8cbf": "Cabinet-4",
+        "Cabinet_83d77a74": "Cabinet-5",
+        "Cabinet_41c7fc3b": "Cabinet-6",
+        "Cabinet_4223545f": "Cabinet-7",
+        "Cabinet_64c8b7ce": "Cabinet-8",
+        "Cabinet_afbfa706": "Cabinet-9"
+    },
+    "sounds": {
+        "27": "toggle-on-faucet.wav",
+        "35": "drop-pot.wav",
+        "46": "toggle-on-stoveburner.wav"
+    }
+}
