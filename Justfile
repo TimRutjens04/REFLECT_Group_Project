@@ -52,6 +52,61 @@ owl-force-one episode:
 analyze:
     {{python}} code/analyze.py encoded/
 
+# ── Perception pipeline (Stages 1–5) ─────────────────────────────────────────
+
+# Stage 1 — Grounding DINO open-vocab detection (aligned/*.npz → detect/*.npz)
+stage1:
+    {{python}} code/pipeline/detect.py
+
+# Stage 1 for a single episode, e.g: just stage1-one boilWater-1
+stage1-one episode:
+    {{python}} code/pipeline/detect.py {{episode}}
+
+# Stage 2 — SAM 2 instance segmentation (detect/*.npz → segment/*.npz)
+stage2:
+    {{python}} code/pipeline/segment.py
+
+# Stage 2 for a single episode
+stage2-one episode:
+    {{python}} code/pipeline/segment.py {{episode}}
+
+# Stage 3 — Depth Anything V2 + SigLIP 2 (segment/*.npz → depth_state/*.npz)
+stage3:
+    {{python}} code/pipeline/depth_state.py
+
+# Stage 3 for a single episode
+stage3-one episode:
+    {{python}} code/pipeline/depth_state.py {{episode}}
+
+# Stage 4 — IoU-based temporal tracking (detect+segment → track/*.npz)
+stage4:
+    {{python}} code/pipeline/track.py
+
+# Stage 4 for a single episode
+stage4-one episode:
+    {{python}} code/pipeline/track.py {{episode}}
+
+# Stage 5 — Rule-based scene graph assembly (all stages → scene_graphs_pipeline/*.json)
+stage5:
+    {{python}} code/pipeline/sg_assemble.py
+
+# Stage 5 for a single episode
+stage5-one episode:
+    {{python}} code/pipeline/sg_assemble.py {{episode}}
+
+# Run full perception pipeline: Stage 1 → 2 → 3 → 4 → 5
+full-pipeline: stage1 stage2 stage3 stage4 stage5
+
+# Run full perception pipeline for a single episode, e.g: just full-pipeline-one boilWater-1
+full-pipeline-one episode:
+    {{python}} code/pipeline/detect.py {{episode}}
+    {{python}} code/pipeline/segment.py {{episode}}
+    {{python}} code/pipeline/depth_state.py {{episode}}
+    {{python}} code/pipeline/track.py {{episode}}
+    {{python}} code/pipeline/sg_assemble.py {{episode}}
+
+# ── Ground-truth scene graphs ─────────────────────────────────────────────────
+
 # Generate GT scene graph videos for all sim episodes (→ scene_graphs/*.mp4)
 scene-graph:
     {{python}} code/scene_graph.py --all

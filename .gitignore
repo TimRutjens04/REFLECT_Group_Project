@@ -68,6 +68,13 @@ outputs/
 logs/
 *.log
 
+# Stage outputs
+detect/
+segment/
+track/
+depth_state/
+scene_graphs_pipeline/
+
 # Secrets / credentials
 .env
 *.env.*
