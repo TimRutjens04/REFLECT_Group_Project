@@ -86,3 +86,4 @@ secrets.json
 # Result visuals
 results/
 scene_graphs/
+visuals/

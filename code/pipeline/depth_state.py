@@ -47,6 +47,11 @@ from transformers import (
     AutoModel,
 )
 
+# ── make code/ importable for state_classifier ────────────────────────────────
+_CODE_DIR = Path(__file__).resolve().parent.parent
+if str(_CODE_DIR) not in sys.path:
+    sys.path.insert(0, str(_CODE_DIR))
+
 # ── paths ──────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent.parent
 ALIGNED_DIR = ROOT / "aligned"
@@ -60,7 +65,30 @@ DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 SIGLIP_MODEL_IDS = [
     "google/siglip-base-patch16-224",      # ~200M params, sufficient for state classification
 ]
-STATE_VOCAB = ["open", "closed", "held", "free", "full", "empty", "on", "off"]
+# STATE_VOCAB must match config.STATE_PAIRS (positive member of each pair first).
+STATE_VOCAB = [
+    "full",   "empty",
+    "open",   "closed",
+    "on",     "off",
+    "held",   "free",
+    "sliced", "whole",
+    "cooked", "raw",
+    "dirty",  "clean",
+    "broken", "intact",
+]
+
+# Mutually exclusive state groups — for each group SigLIP picks the winning member.
+# The group with the highest winning score wins overall; no per-label hardcoding needed:
+# SigLIP will give near-zero confidence to irrelevant groups (e.g. "sliced faucet").
+STATE_GROUPS: list[tuple[str, str]] = [
+    ("held",   "free"),     # grip state
+    ("open",   "closed"),   # open/close state
+    ("full",   "empty"),    # fill state
+    ("on",     "off"),      # toggle state
+    ("sliced", "whole"),    # integrity state
+    ("cooked", "raw"),      # thermal state
+]
+
 DEPTH_SCALE = 2      # store depth at 1/2 resolution
 MAX_DET = 20         # must match detect.py / segment.py
 MIN_CROP_PX = 8      # skip crops smaller than this in either dim
@@ -73,6 +101,8 @@ _depth_proc: AutoImageProcessor | None = None
 _depth_model: AutoModelForDepthEstimation | None = None
 _sig_proc: AutoProcessor | None = None
 _sig_model: AutoModel | None = None
+_adapter = None        # SigLIPStateAdapter | None
+_adapter_loaded = False   # True once we have tried (avoids repeated disk checks)
 
 
 def _get_depth_model() -> tuple[AutoImageProcessor, AutoModelForDepthEstimation]:
@@ -104,6 +134,81 @@ def _get_siglip_model() -> tuple[AutoProcessor, AutoModel]:
         if not loaded:
             raise RuntimeError("No SigLIP model available. Check your internet connection.")
     return _sig_proc, _sig_model  # type: ignore[return-value]
+
+
+# ── adapter (optional fine-tuned MLP on frozen SigLIP) ────────────────────────
+
+def _get_adapter():
+    """Load SigLIPStateAdapter from checkpoint if available, else return None."""
+    global _adapter, _adapter_loaded
+    if _adapter_loaded:
+        return _adapter
+    _adapter_loaded = True
+    try:
+        from state_classifier.model import load_adapter  # noqa: PLC0415
+        _adapter = load_adapter(DEVICE)
+        if _adapter is not None:
+            print("  [adapter] Loaded fine-tuned state adapter from checkpoint")
+        else:
+            print("  [adapter] No checkpoint found — using zero-shot SigLIP fallback")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [adapter] Could not load adapter ({e}) — using zero-shot fallback")
+        _adapter = None
+    return _adapter
+
+
+@torch.inference_mode()
+def adapter_classify_state(
+    crops: list[Image.Image],
+    labels: list[str],
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Classify object states using the fine-tuned adapter when available,
+    falling back to zero-shot classify_state if no checkpoint exists.
+
+    Same signature as classify_state — drop-in replacement.
+    """
+    adapter = _get_adapter()
+    if adapter is None:
+        return classify_state(crops, labels)
+
+    from state_classifier.config import STATE_PAIRS as SC_PAIRS  # noqa: PLC0415
+    from state_classifier.model import extract_siglip_features  # noqa: PLC0415
+
+    k = len(crops)
+    state_ids   = np.full(k, -1, dtype=np.int32)
+    state_probs = np.zeros(k, dtype=np.float32)
+    if k == 0:
+        return state_ids, state_probs
+
+    proc_obj, siglip_model = _get_siglip_model()
+    inputs = proc_obj(
+        images=crops,
+        return_tensors="pt",
+        padding="max_length",
+    ).to(DEVICE)
+    features = extract_siglip_features(inputs["pixel_values"], siglip_model, DEVICE)
+
+    logits = adapter(features)                    # (k, N_PAIRS)
+    probs  = torch.sigmoid(logits).cpu().numpy()  # (k, N_PAIRS)
+
+    for ci in range(k):
+        best_pair = int(np.argmax(probs[ci]))
+        best_prob = float(probs[ci, best_pair])
+        pos_label, _ = SC_PAIRS[best_pair]
+        # Map to STATE_VOCAB index
+        try:
+            vocab_idx = STATE_VOCAB.index(pos_label)
+            if probs[ci, best_pair] < 0.5:
+                # negative class won — use the neg label
+                _, neg_label = SC_PAIRS[best_pair]
+                vocab_idx = STATE_VOCAB.index(neg_label)
+        except ValueError:
+            vocab_idx = 0
+        state_ids[ci]   = vocab_idx
+        state_probs[ci] = best_prob
+
+    return state_ids, state_probs
 
 
 # ── depth estimation ───────────────────────────────────────────────────────────
@@ -163,16 +268,22 @@ def _mask_mean_depth(depth_full: np.ndarray, mask_small: np.ndarray) -> float:
 
 @torch.inference_mode()
 def classify_state(
-    crops: list[Image.Image],   # object image crops
-    state_labels: list[str],
+    crops: list[Image.Image],
+    labels: list[str],
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Score each crop against state_labels with SigLIP 2 (sigmoid zero-shot).
+    Classify the dominant state for each object crop using STATE_GROUPS.
+
+    For each group (e.g. "held"/"free") we build queries like "a held apple",
+    "a free apple" and let SigLIP score them independently (sigmoid).  The
+    winning state is the one with the highest score across *all* groups — so
+    irrelevant groups (e.g. "sliced stoveburner") lose naturally without any
+    per-label hardcoding.
 
     Returns
     -------
-    state_ids   (k,)      int32   index of highest-sigmoid state
-    state_probs (k,)      float32 sigmoid probability of chosen state
+    state_ids   (k,)  int32   — index into STATE_VOCAB
+    state_probs (k,)  float32 — sigmoid confidence of the chosen state
     """
     proc, model = _get_siglip_model()
     k = len(crops)
@@ -182,23 +293,39 @@ def classify_state(
     if k == 0:
         return state_ids, state_probs
 
-    # Batch all (crop, state) pairs
-    all_inputs = proc(
-        text=state_labels,
-        images=crops,
+    # Build one flat list of text queries for all crops × all group members.
+    # Layout: crop0_group0_stateA, crop0_group0_stateB, crop0_group1_stateA, …
+    #         crop1_group0_stateA, …
+    all_queries: list[str] = []
+    all_crops_expanded: list[Image.Image] = []
+    states_flat = [s for g in STATE_GROUPS for s in g]   # all state strings in order
+    n_states = len(states_flat)
+
+    for crop, label in zip(crops, labels):
+        for state in states_flat:
+            all_queries.append(f"a {state} {label}")
+            all_crops_expanded.append(crop)
+
+    inputs = proc(
+        text=all_queries,
+        images=all_crops_expanded,
         return_tensors="pt",
         padding="max_length",
     ).to(DEVICE)
 
-    outputs = model(**all_inputs)
-    # logits_per_image: (num_crops, num_labels) — sigmoid for independent scoring
-    logits = outputs.logits_per_image        # (k, S)
-    probs = torch.sigmoid(logits).cpu().numpy()   # (k, S)
+    outputs = model(**inputs)
+    # logits_per_image: (k * n_states, k * n_states) diagonal is what we want
+    # Each row i corresponds to all_crops_expanded[i], column i to all_queries[i].
+    # We want the diagonal: score[i] = similarity(crop_i, query_i).
+    logits_diag = outputs.logits_per_image.diagonal()        # (k * n_states,)
+    probs_all = torch.sigmoid(logits_diag).cpu().numpy()     # (k * n_states,)
 
-    for i in range(k):
-        best = int(np.argmax(probs[i]))
-        state_ids[i] = best
-        state_probs[i] = float(probs[i, best])
+    for ci in range(k):
+        row = probs_all[ci * n_states: (ci + 1) * n_states]  # (n_states,)
+        best_flat = int(np.argmax(row))
+        best_state_str = states_flat[best_flat]
+        state_ids[ci] = STATE_VOCAB.index(best_state_str)
+        state_probs[ci] = float(row[best_flat])
 
     return state_ids, state_probs
 
@@ -246,6 +373,8 @@ def process_episode(episode_id: str) -> None:
 
     all_boxes: np.ndarray = det["boxes"]             # (N, MAX_DET, 4)
     all_n_dets: np.ndarray = det["n_dets"]           # (N,)
+    label_vocab: list[str] = list(det["label_vocab"])
+    all_label_ids: np.ndarray = det["label_ids"]     # (N, MAX_DET)
 
     masks_small: np.ndarray = seg["masks_small"]     # (N, MAX_DET, Hs, Ws)
     mask_valid: np.ndarray = seg["mask_valid"]       # (N, MAX_DET)
@@ -272,17 +401,19 @@ def process_episode(episode_id: str) -> None:
                 continue
             obj_depth[i, j] = _mask_mean_depth(depth_maps[i], masks_small[i, j])
 
-        # --- object state via SigLIP 2 ---
+        # --- object state via SigLIP ---
         crops = []
+        crop_labels = []
         valid_js = []
         for j in range(k):
             crop = _extract_crop(frames[i], all_boxes[i, j])
             if crop is not None:
                 crops.append(crop)
+                crop_labels.append(label_vocab[int(all_label_ids[i, j])])
                 valid_js.append(j)
 
         if crops:
-            state_ids, state_probs = classify_state(crops, STATE_VOCAB)
+            state_ids, state_probs = adapter_classify_state(crops, crop_labels)
             for m, j in enumerate(valid_js):
                 obj_state[i, j] = state_ids[m]
                 obj_state_prob[i, j] = state_probs[m]
