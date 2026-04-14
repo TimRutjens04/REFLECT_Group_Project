@@ -105,6 +105,16 @@ full-pipeline-one episode:
     {{python}} code/pipeline/track.py {{episode}}
     {{python}} code/pipeline/sg_assemble.py {{episode}}
 
+# ── Visualization ────────────────────────────────────────────────────────────
+
+# Render overlay videos for all episodes (→ visuals/*.mp4)
+visualize:
+    {{python}} code/visualize.py
+
+# Render overlay video for a single episode, e.g: just viz-one boilWater-1
+viz-one episode:
+    {{python}} code/visualize.py {{episode}}
+
 # ── Ground-truth scene graphs ─────────────────────────────────────────────────
 
 # Generate GT scene graph videos for all sim episodes (→ scene_graphs/*.mp4)
@@ -114,6 +124,13 @@ scene-graph:
 # Generate GT scene graph video for a single sim episode, e.g: just scene-graph-one boilWater-1
 scene-graph-one episode:
     {{python}} code/scene_graph.py {{episode}}
+
+# Execute the pipeline evaluation notebook in-place
+eval:
+    poetry run jupyter nbconvert --to notebook --execute --inplace \
+        notebooks/eval_pipeline.ipynb \
+        --ExecutePreprocessor.timeout=600 \
+        --ExecutePreprocessor.kernel_name=python3
 
 # Execute the exploration notebook in-place
 notebook:
@@ -125,6 +142,20 @@ notebook:
 # Launch the embedding visualizer GUI
 gui:
     poetry run streamlit run code/gui.py
+
+# ── State classifier (SigLIP adapter) ────────────────────────────────────────
+
+# Extract labeled crops from existing sim pickles (→ state_classifier/dataset.pkl)
+classify-generate:
+    {{python}} code/state_classifier/generate_dataset.py
+
+# Train the SigLIP adapter on sim data (→ state_classifier/checkpoints/best.pt)
+classify-train:
+    {{python}} code/state_classifier/train.py
+
+# Evaluate adapter vs zero-shot SigLIP baseline on the test split
+classify-eval:
+    {{python}} code/state_classifier/eval.py
 
 # ── Inspection ────────────────────────────────────────────────────────────────
 
