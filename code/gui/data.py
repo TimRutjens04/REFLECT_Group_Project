@@ -1,13 +1,38 @@
 import json
 import os
+import re
 import time
 
 import numpy as np
 import streamlit as st
 from sklearn.decomposition import PCA
 
-from .config import ALIGNED_DIR, ENCODED_DIR, TASKS_JSON
+from .config import ALIGNED_DIR, DATA_DIR, ENCODED_DIR, TASKS_JSON
 from .logger import log
+
+
+@st.cache_data
+def load_sim_task_meta(episode_id: str) -> dict | None:
+    """
+    Load actions and object_list from the per-episode task.json for sim episodes
+    (boilWater-N, makeSalad-N). Returns None if the file does not exist.
+
+    Path convention: data/sim_data/<task_name>/<episode_id>/task.json
+    where <task_name> is the episode_id with the trailing -N stripped.
+    """
+    task_name = re.sub(r"-\d+$", "", episode_id)   # "boilWater-3" → "boilWater"
+    path = os.path.join(DATA_DIR, "sim_data", task_name, episode_id, "task.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        meta = json.load(f)
+    return {
+        "actions":     meta.get("actions", []),
+        "object_list": meta.get("object_list", []),
+        "name":        meta.get("name", task_name),
+        "gt_failure_reason": meta.get("gt_failure_reason", ""),
+        "success_condition": meta.get("success_condition", ""),
+    }
 
 
 @st.cache_data

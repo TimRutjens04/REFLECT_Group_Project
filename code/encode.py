@@ -45,6 +45,7 @@ from tqdm import tqdm
 ENCODED_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "encoded"))
 if torch.cuda.is_available():
     DEVICE = "cuda"
+
 elif torch.backends.mps.is_available():
     DEVICE = "mps"
 else:

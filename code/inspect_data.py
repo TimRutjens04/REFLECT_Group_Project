@@ -6,7 +6,9 @@ Results should be documented in a comment block at the top of align.py.
 import json
 import os
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+DATASETS_ROOT = "/home/coder/datasets"
+DATA_DIR = os.path.join(DATASETS_ROOT, "sim_data")
+REAL_DIR = os.path.join(DATASETS_ROOT, "real_data")
 
 
 def inspect_video(path, label):
@@ -136,7 +138,7 @@ if __name__ == "__main__":
     inspect_ego_img(bw1, "boilWater-1")
 
     # --- putFruitsBowl2 ---
-    pfb = os.path.join(DATA_DIR, "putFruitsBowl", "putFruitsBowl2")
+    pfb = os.path.join(REAL_DIR, "putFruitsBowl", "putFruitsBowl2")
     print("\n--- putFruitsBowl2 ---")
     inspect_video(os.path.join(pfb, "videos", "color.mp4"), "putFruitsBowl2/videos/color.mp4")
     inspect_audio_wav(os.path.join(pfb, "videos", "audio.wav"), "putFruitsBowl2/videos/audio.wav")
@@ -144,7 +146,7 @@ if __name__ == "__main__":
 
     # --- tasks_real_world.json ---
     print("\n--- tasks_real_world.json ---")
-    inspect_tasks_real_world(os.path.join(DATA_DIR, "tasks_real_world.json"))
+    inspect_tasks_real_world(os.path.join(DATASETS_ROOT, "tasks_real_world.json"))
 
     print("\n" + "=" * 60)
     print("INSPECTION COMPLETE")

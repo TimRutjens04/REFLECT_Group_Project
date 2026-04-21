@@ -46,26 +46,11 @@ import librosa
 import numpy as np
 from tqdm import tqdm
 
-
-def find_datasets_root(start: Path) -> Path:
-    """
-    Locate the datasets root directory (the parent folder of real_data/sim_data).
-    Searches upward from `start` for a sibling folder named `datasets`.
-    """
-    for parent in [start, *start.parents]:
-        candidate = parent / "datasets"
-        if candidate.is_dir() and (candidate / "real_data").is_dir():
-            return candidate
-    raise FileNotFoundError(
-        "Could not find datasets root containing real_data/. "
-        "Expected a ../datasets-style layout."
-    )
-
-
-DATASETS_ROOT = find_datasets_root(Path(__file__).resolve())
+CWD = Path.cwd()
+DATASETS_ROOT = CWD.parents[2] / "datasets"
 SIM_DATA_DIR = DATASETS_ROOT / "sim_data"
 REAL_DATA_DIR = DATASETS_ROOT / "real_data"
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "aligned"
+OUTPUT_DIR = CWD / "aligned"
 
 
 # ---------------------------------------------------------------------------
@@ -347,17 +332,17 @@ def align_real_episode(episode_dir: str, output_dir: str,
 # Main
 # ---------------------------------------------------------------------------
 
-SIM_TASKS = ["boilWater", "makeSalad"]
+# SIM_TASKS = ["boilWater", "makeSalad"]
 
 
-def iter_sim_episodes(task_name: str):
-    """Yield episode dirs nested inside data/<task_name>/."""
-    task_dir = SIM_DATA_DIR / task_name
-    if not task_dir.is_dir():
-        return
-    for ep_dir in sorted(task_dir.iterdir()):
-        if ep_dir.is_dir() and not ep_dir.name.startswith("."):
-            yield str(ep_dir)
+def iter_sim_episodes():
+    """Yield all episode dirs nested inside sim_data/."""
+    for task_dir in sorted(SIM_DATA_DIR.iterdir()):
+        if not task_dir.is_dir() or task_dir.name.startswith("."):
+            continue
+        for ep_dir in sorted(task_dir.iterdir()):
+            if ep_dir.is_dir() and not ep_dir.name.startswith("."):
+                yield str(ep_dir)
 
 
 def iter_real_episodes(tasks_meta: dict):
@@ -396,10 +381,11 @@ def iter_real_episodes(tasks_meta: dict):
 
 
 def main():
+    # ...existing code...
     tasks_meta = load_tasks_real_world(str(DATASETS_ROOT))
 
     # --- Sim episodes ---
-    sim_episodes = [ep for task in SIM_TASKS for ep in iter_sim_episodes(task)]
+    sim_episodes = list(iter_sim_episodes())
     print(f"Found {len(sim_episodes)} sim episodes")
     for ep_dir in tqdm(sim_episodes, desc="Sim episodes"):
         ep_id = os.path.basename(ep_dir)
@@ -438,7 +424,7 @@ if __name__ == "__main__":
 
         task = ep_path.parent.name
         tasks_meta = load_tasks_real_world(str(DATASETS_ROOT))
-        if task in SIM_TASKS:
+        if (SIM_DATA_DIR / task).is_dir():
             out = align_sim_episode(str(ep_path), str(OUTPUT_DIR))
         else:
             out = align_real_episode(str(ep_path), str(OUTPUT_DIR), tasks_meta)

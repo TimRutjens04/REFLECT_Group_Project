@@ -67,8 +67,14 @@ analysis/
 outputs/
 logs/
 *.log
+state_summary/
+scene/
 
 # Secrets / credentials
 .env
 *.env.*
 secrets.json
+
+# Workspace
+*.code-workspace
+

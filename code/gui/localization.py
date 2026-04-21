@@ -111,13 +111,29 @@ def _owl_npz_path(episode_id: str) -> str:
 
 
 def _object_list_for(episode_id: str) -> list[str]:
-    """Look up the object_list for an episode from tasks_real_world.json."""
-    if not os.path.exists(TASKS_JSON):
-        return []
-    with open(TASKS_JSON) as f:
-        raw = json.load(f)
-    meta = {v["general_folder_name"]: v for v in raw.values()}
-    return meta.get(episode_id, {}).get("object_list", [])
+    """
+    Look up the object_list for an episode.
+    Real-world episodes: tasks_real_world.json (central file).
+    Sim episodes (boilWater-N, makeSalad-N): per-episode task.json.
+    """
+    # Try real-world metadata first
+    if os.path.exists(TASKS_JSON):
+        with open(TASKS_JSON) as f:
+            raw = json.load(f)
+        meta = {v["general_folder_name"]: v for v in raw.values()}
+        obj_list = meta.get(episode_id, {}).get("object_list", [])
+        if obj_list:
+            return obj_list
+
+    # Fall back to per-episode task.json (sim episodes)
+    import re
+    task_name = re.sub(r"-\d+$", "", episode_id)
+    sim_json = os.path.join(os.path.dirname(TASKS_JSON), task_name, episode_id, "task.json")
+    if os.path.exists(sim_json):
+        with open(sim_json) as f:
+            return json.load(f).get("object_list", [])
+
+    return []
 
 
 @st.cache_data(show_spinner="Loading pre-computed OWL-ViT detections...")

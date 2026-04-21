@@ -21,6 +21,17 @@ dependencies = [
     "transformers>=5.3.0",
     "wav2clip>=0.1.0",
     "zarr>=3.1.6",
+    "termcolor>=3.3.0",
+    "ignite>=1.1.0",
+    "pytorch-ignite>=0.5.4",
+    "visdom==0.1.8.9",
+    "scikit-image>=0.26.0",
+    "transforms3d>=0.4.2",
+    "open3d>=0.19.0",
+    "sentence-transformers>=5.4.0",
+    "imagecodecs>=2026.3.6",
+    "openai>=2.31.0",
+    "timm==0.4.12",
 ]
 
 [tool.uv.sources]
@@ -32,3 +43,6 @@ torchvision = { index = "pytorch-cu128" }
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+[tool.uv.extra-build-dependencies]
+visdom = ["setuptools"]

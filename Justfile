@@ -11,9 +11,9 @@ default:
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
-# Install all dependencies via Poetry
+# Install all dependencies via uv
 install:
-    poetry install
+    uv sync
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
@@ -46,14 +46,14 @@ analyze:
 
 # Execute the exploration notebook in-place
 notebook:
-    poetry run jupyter nbconvert --to notebook --execute --inplace \
+    uv run jupyter nbconvert --to notebook --execute --inplace \
         notebooks/exploration.ipynb \
         --ExecutePreprocessor.timeout=300 \
         --ExecutePreprocessor.kernel_name=python3
 
 # Launch the embedding visualizer GUI
 gui:
-    poetry run streamlit run code/gui.py
+    uv run streamlit run code/gui.py
 
 # ── Inspection ────────────────────────────────────────────────────────────────
 
@@ -69,15 +69,15 @@ sanity:
 
 # Lint all code
 lint:
-    poetry run ruff check code/
+    uv run ruff check code/
 
 # Auto-fix lint issues
 lint-fix:
-    poetry run ruff check --fix code/
+    uv run ruff check --fix code/
 
 # Format all code
 fmt:
-    poetry run ruff format code/
+    uv run ruff format code/
 
 # Lint + format in one pass
 check: lint fmt
