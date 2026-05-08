@@ -37,7 +37,7 @@ from state_classifier.dataset import (  # noqa: E402
     split_by_episode,
 )
 from state_classifier.model import (  # noqa: E402
-    SigLIPStateAdapter,
+    StateAdapter,
     extract_siglip_features,
     load_adapter,
 )
@@ -50,7 +50,7 @@ BATCH_SIZE = 64
 
 @torch.no_grad()
 def eval_adapter(
-    adapter: SigLIPStateAdapter,
+    adapter: StateAdapter,
     siglip:  nn.Module,
     loader:  DataLoader,
 ) -> list[float]:

@@ -29,6 +29,9 @@ CODE_DIR = Path(__file__).resolve().parent.parent
 if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
+import numpy as np
+from sklearn.metrics import average_precision_score
+
 from state_classifier.config import N_PAIRS, SIGLIP_MODEL_ID, STATE_PAIRS  # noqa: E402
 from state_classifier.dataset import (  # noqa: E402
     StateDataset,
@@ -37,46 +40,48 @@ from state_classifier.dataset import (  # noqa: E402
     split_by_episode,
 )
 from state_classifier.model import (  # noqa: E402
-    SigLIPStateAdapter,
+    StateAdapter,
     extract_siglip_features,
     save_adapter,
 )
 
 # ── hyper-parameters ──────────────────────────────────────────────────────────
-EPOCHS      = 20
-BATCH_SIZE  = 64
-LR          = 1e-3
-WEIGHT_DECAY = 1e-4
-NUM_WORKERS = 0   # 0 = main process (PIL Images don't pickle well across workers)
+# E3 ablation: val mAP peaked at epoch ~30; early stopping patience=8.
+EPOCHS         = 30
+EARLY_STOP_PAT = 8
+BATCH_SIZE     = 64
+LR             = 1e-3
+WEIGHT_DECAY   = 1e-4
+NUM_WORKERS    = 0   # PIL Images don't pickle well across workers
 
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 
 
-def compute_per_pair_accuracy(
+def compute_per_pair_ap(
     logits: torch.Tensor,
     labels: torch.Tensor,
     mask:   torch.Tensor,
 ) -> list[float]:
-    """Binary accuracy per state pair (only where mask=1)."""
-    preds = (logits > 0).float()
-    accs = []
+    """Average Precision per state pair (mask=1 only), following Newman et al."""
+    probs = torch.sigmoid(logits).numpy()
+    aps = []
     for i in range(N_PAIRS):
-        m = mask[:, i].bool()
-        if m.sum() == 0:
-            accs.append(float("nan"))
+        m = mask[:, i].bool().numpy()
+        if m.sum() < 2 or labels[m, i].numpy().sum() == 0:
+            aps.append(float("nan"))
         else:
-            accs.append(float((preds[m, i] == labels[m, i]).float().mean()))
-    return accs
+            aps.append(float(average_precision_score(labels[m, i].numpy(), probs[m, i])))
+    return aps
 
 
 @torch.no_grad()
 def evaluate(
-    adapter:       SigLIPStateAdapter,
-    siglip:        nn.Module,
-    loader:        DataLoader,
-    criterion:     nn.BCEWithLogitsLoss,
+    adapter:   StateAdapter,
+    siglip:    nn.Module,
+    loader:    DataLoader,
+    criterion: nn.BCEWithLogitsLoss,
 ) -> tuple[float, list[float]]:
-    """Return mean masked loss and per-pair accuracy."""
+    """Return mean masked loss and per-pair AP."""
     adapter.eval()
     total_loss = 0.0
     all_logits: list[torch.Tensor] = []
@@ -96,8 +101,8 @@ def evaluate(
     all_logits = torch.cat(all_logits)
     all_labels = torch.cat(all_labels)
     all_masks  = torch.cat(all_masks)
-    accs = compute_per_pair_accuracy(all_logits, all_labels, all_masks)
-    return total_loss / max(len(loader), 1), accs
+    aps = compute_per_pair_ap(all_logits, all_labels, all_masks)
+    return total_loss / max(len(loader), 1), aps
 
 
 def main() -> None:
@@ -123,7 +128,7 @@ def main() -> None:
     for p in siglip.parameters():
         p.requires_grad = False
 
-    adapter = SigLIPStateAdapter().to(DEVICE)
+    adapter = StateAdapter().to(DEVICE)
     print(f"Adapter parameters: {sum(p.numel() for p in adapter.parameters()):,}")
 
     # ── training ──────────────────────────────────────────────────────────────
@@ -131,7 +136,8 @@ def main() -> None:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
     criterion = nn.BCEWithLogitsLoss(reduction="none")
 
-    best_val_acc = -1.0
+    best_val_map  = -1.0
+    patience_left = EARLY_STOP_PAT
 
     for epoch in range(1, EPOCHS + 1):
         adapter.train()
@@ -142,7 +148,6 @@ def main() -> None:
         ):
             features = extract_siglip_features(pixel_values, siglip, DEVICE)
             logits   = adapter(features)
-
             loss_mat = criterion(logits, labels.to(DEVICE))
             mask_dev = mask.to(DEVICE)
             loss     = (loss_mat * mask_dev).sum() / mask_dev.sum().clamp(min=1)
@@ -155,28 +160,30 @@ def main() -> None:
         scheduler.step()
         train_loss /= max(len(train_loader), 1)
 
-        val_loss, val_accs = evaluate(adapter, siglip, val_loader, criterion)
-        valid_accs = [a for a in val_accs if a == a]   # exclude NaN
-        mean_acc   = sum(valid_accs) / len(valid_accs) if valid_accs else 0.0
+        val_loss, val_aps = evaluate(adapter, siglip, val_loader, criterion)
+        valid_aps = [a for a in val_aps if not np.isnan(a)]
+        mean_ap   = float(np.mean(valid_aps)) if valid_aps else 0.0
 
         print(f"Epoch {epoch:02d} | train_loss={train_loss:.4f} "
-              f"val_loss={val_loss:.4f} val_acc={mean_acc:.3f}")
+              f"val_loss={val_loss:.4f} val_mAP={mean_ap:.3f}")
 
-        # Per-pair accuracy
         pair_strs = []
-        for i, ((pos, neg), acc) in enumerate(zip(STATE_PAIRS, val_accs)):
-            if acc != acc:   # NaN
-                pair_strs.append(f"{pos}/{neg}: —")
-            else:
-                pair_strs.append(f"{pos}/{neg}: {acc:.2f}")
+        for (pos, neg), ap in zip(STATE_PAIRS, val_aps):
+            pair_strs.append(f"{pos}/{neg}: {'—' if np.isnan(ap) else f'{ap:.3f}'}")
         print("  " + "  ".join(pair_strs))
 
-        if mean_acc > best_val_acc:
-            best_val_acc = mean_acc
+        if mean_ap > best_val_map:
+            best_val_map  = mean_ap
+            patience_left = EARLY_STOP_PAT
             save_adapter(adapter)
-            print(f"  ✓ new best val_acc={best_val_acc:.3f} — checkpoint saved")
+            print(f"  ✓ new best mAP={best_val_map:.3f} — checkpoint saved")
+        else:
+            patience_left -= 1
+            if patience_left == 0:
+                print(f"  Early stopping at epoch {epoch} (patience={EARLY_STOP_PAT})")
+                break
 
-    print(f"\nTraining complete. Best val acc: {best_val_acc:.3f}")
+    print(f"\nTraining complete. Best val mAP: {best_val_map:.3f}")
 
 
 if __name__ == "__main__":

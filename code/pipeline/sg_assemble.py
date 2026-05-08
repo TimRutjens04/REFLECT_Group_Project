@@ -140,7 +140,7 @@ def compute_spatial_relations(
     frame_width: float,
 ) -> list[dict]:
     """
-    Apply rule-based spatial relation rules from CLAUDE.md to a list of object dicts.
+    Apply rule-based spatial relation rules to a list of object dicts.
 
     Each object dict has keys: id, bbox [x1,y1,x2,y2], depth, held_by_gripper.
     Returns list of {"subject": id, "relation": str, "object": id | "gripper"}.

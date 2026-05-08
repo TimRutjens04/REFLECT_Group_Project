@@ -63,30 +63,32 @@ DEPTH_STATE_DIR.mkdir(exist_ok=True)
 # ── config ─────────────────────────────────────────────────────────────────────
 DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 SIGLIP_MODEL_IDS = [
-    "google/siglip-base-patch16-224",      # ~200M params, sufficient for state classification
+    "google/siglip2-so400m-patch16-384",   # empirically best for physical state (E1: mAP 0.866)
+    "google/siglip-base-patch16-224",      # fallback if So400m unavailable
 ]
-# STATE_VOCAB must match config.STATE_PAIRS (positive member of each pair first).
+# STATE_VOCAB: 7 pairs, alphabetical order matching config.STATE_PAIRS.
+# held/free intentionally absent — handled by the tracking stage, not state classifier.
 STATE_VOCAB = [
-    "full",   "empty",
-    "open",   "closed",
-    "on",     "off",
-    "held",   "free",
-    "sliced", "whole",
+    "broken", "intact",
     "cooked", "raw",
     "dirty",  "clean",
-    "broken", "intact",
+    "full",   "empty",
+    "on",     "off",
+    "open",   "closed",
+    "sliced", "whole",
 ]
 
 # Mutually exclusive state groups — for each group SigLIP picks the winning member.
 # The group with the highest winning score wins overall; no per-label hardcoding needed:
 # SigLIP will give near-zero confidence to irrelevant groups (e.g. "sliced faucet").
 STATE_GROUPS: list[tuple[str, str]] = [
-    ("held",   "free"),     # grip state
-    ("open",   "closed"),   # open/close state
+    ("broken", "intact"),   # breakage state
+    ("cooked", "raw"),      # thermal state
+    ("dirty",  "clean"),    # cleanliness state
     ("full",   "empty"),    # fill state
     ("on",     "off"),      # toggle state
+    ("open",   "closed"),   # open/close state
     ("sliced", "whole"),    # integrity state
-    ("cooked", "raw"),      # thermal state
 ]
 
 DEPTH_SCALE = 2      # store depth at 1/2 resolution
