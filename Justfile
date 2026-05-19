@@ -36,6 +36,42 @@ encode:
 owl:
     {{python}} code/owl_detect.py
 
+# Run CSRT tracking on all episodes (detect/ → track/)
+track:
+    {{python}} code/track.py
+
+# Run CSRT tracking on a single episode, e.g: just track-one boilWater-1
+track-one episode:
+    {{python}} code/track.py {{episode}}
+
+# Force-rerun CSRT tracking on a single episode
+track-force-one episode:
+    {{python}} code/track.py {{episode}} --force
+
+# Render tracked bbox overlay video for all episodes (→ visuals/tracked/)
+visualize-track:
+    {{python}} code/visualize_track.py
+
+# Render tracked bbox overlay video for a single episode
+visualize-track-one episode:
+    {{python}} code/visualize_track.py {{episode}}
+
+# Manually seed CSRT from a drawn bbox and track through a video (no GDINO), e.g:
+#   just demo-track IMG_0081.MOV "coffee mug"
+demo-track video label:
+    {{python}} code/demo_track.py "{{video}}" --label "{{label}}"
+
+# Track and visualize a single named object, e.g: just track-object boilWater-1 "apple"
+track-object episode object:
+    {{python}} code/track.py {{episode}} --object "{{object}}" --force
+    {{python}} code/visualize_track.py {{episode}} --object "{{object}}"
+
+# Track and visualize multiple named objects (GDINO-style period-separated), e.g:
+#   just track-objects boilWater-1 "cooking pot. fridge. stove burner."
+track-objects episode objects:
+    {{python}} code/track.py {{episode}} --object "{{objects}}" --force
+    {{python}} code/visualize_track.py {{episode}} --object "{{objects}}"
+
 # Run OWL-ViT for a single episode by name, e.g: just owl-one appleInFridge1
 owl-one episode:
     {{python}} code/owl_detect.py {{episode}}
