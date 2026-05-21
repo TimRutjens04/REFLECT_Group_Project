@@ -54,3 +54,79 @@ class CsrtObjectTracker(ObjectTracker):
                 confidence=1.0,  # raw CSRT result; validator adjusts this
             )
         ])
+
+
+class Sam2ObjectTracker(ObjectTracker):
+    """
+    SAM 2 offline tracker implementing ObjectTracker.
+
+    Because SAM 2 requires all frames upfront, this tracker buffers frames
+    during track() calls and processes the full episode lazily on finalize().
+
+    Typical usage (offline episode):
+        tracker.initialize(frame0, detections)
+        for frame in frames[1:]:
+            tracker.track(frame)          # buffers frame, returns last known result
+        results = tracker.finalize()      # runs SAM 2, returns list[TrackingResult]
+    """
+
+    def __init__(self) -> None:
+        from trackers.sam2_tracker import Sam2Tracker
+        self._sam2 = Sam2Tracker()
+        self._seed_bbox: np.ndarray | None = None
+        self._label: str = ""
+        self._frames: list[np.ndarray] = []
+        self._cache: list[TrackingResult] = []
+        self._cache_idx: int = 0
+
+    def initialize(self, frame: RgbdFrame, detections: DetectionResult) -> None:
+        if not detections.detections:
+            return
+        best = detections.detections[0]
+        self._seed_bbox = best.bbox_2d.copy()
+        self._label = best.label
+        frame_bgr = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
+        self._frames = [frame_bgr]
+        self._cache = []
+        self._cache_idx = 0
+
+    def track(self, frame: RgbdFrame) -> TrackingResult:
+        frame_bgr = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
+        self._frames.append(frame_bgr)
+        # Return from cache if finalize() was already called.
+        if self._cache and self._cache_idx < len(self._cache):
+            result = self._cache[self._cache_idx]
+            self._cache_idx += 1
+            return result
+        # Not yet finalized — return last known (empty before first finalize).
+        return self._cache[-1] if self._cache else TrackingResult(tracked_objects=[])
+
+    def finalize(self) -> list[TrackingResult]:
+        """Run SAM 2 on all buffered frames. Call after the last track() for the episode."""
+        if self._seed_bbox is None or not self._frames:
+            return []
+        preds_per_obj, _ = self._sam2.run_video(self._frames, [self._seed_bbox])
+        preds = preds_per_obj[0]  # single object
+        self._cache = []
+        for bbox in preds:
+            if bbox is None:
+                self._cache.append(TrackingResult(tracked_objects=[]))
+            else:
+                self._cache.append(TrackingResult(tracked_objects=[
+                    TrackedObject(
+                        track_id=1,
+                        label=self._label,
+                        bbox_2d=bbox,
+                        confidence=1.0,
+                    )
+                ]))
+        self._cache_idx = 0
+        return self._cache
+
+
+def create_tracker(cfg: dict) -> ObjectTracker:
+    """Factory — reads cfg['tracker']['backend'] (default: 'csrt')."""
+    backend = cfg.get("tracker", {}).get("backend", "csrt")
+    if backend == "sam2":
+        return Sam2ObjectTracker()
+    return CsrtObjectTracker()
