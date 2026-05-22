@@ -52,5 +52,6 @@ line-ending = "auto"
 
 [dependency-groups]
 dev = [
-    "ruff (>=0.15.6,<0.16.0)"
+    "ruff (>=0.15.6,<0.16.0)",
+    "pytest (>=9.0.3,<10.0.0)"
 ]

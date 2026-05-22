@@ -146,6 +146,12 @@ inspect:
 sanity:
     {{python}} code/sanity_check.py
 
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+# Run all unit tests
+test:
+    poetry run pytest tests/ -v
+
 # ── Code quality ──────────────────────────────────────────────────────────────
 
 # Lint all code
