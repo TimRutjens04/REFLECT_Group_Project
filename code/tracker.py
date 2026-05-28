@@ -37,6 +37,18 @@ class CsrtObjectTracker(ObjectTracker):
         self._track_id += 1
         self._label = best.label
 
+    def reinitialize(self, frame: RgbdFrame, detections: DetectionResult) -> None:
+        """Reseed CSRT without bumping track_id — same object re-acquired after occlusion."""
+        if not detections.detections:
+            return
+        best = detections.detections[0]
+        frame_bgr = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
+        x1, y1, x2, y2 = best.bbox_2d
+        w = max(float(x2 - x1), 1.0)
+        h = max(float(y2 - y1), 1.0)
+        self._tracker = cv2.legacy.TrackerCSRT_create()
+        self._tracker.init(frame_bgr, (float(x1), float(y1), w, h))
+
     def track(self, frame: RgbdFrame) -> TrackingResult:
         if self._tracker is None:
             return TrackingResult(tracked_objects=[])

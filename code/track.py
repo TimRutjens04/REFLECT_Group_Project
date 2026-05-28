@@ -41,6 +41,7 @@ from tqdm import tqdm
 from detector import GroundingDinoDetector
 from frame_provider import AlignedEpisodeFrameProvider
 from interfaces import DetectedObject, DetectionResult, ObjectDetector
+from reid import ObjectReIdMatcher
 from tracker import CsrtObjectTracker
 from validator import CompositeTrackingValidator
 
@@ -163,6 +164,8 @@ def track_episode(
 
     t0 = time.perf_counter()
 
+    reid = ObjectReIdMatcher()
+
     # One tracker + validator per object class
     trackers:   list[CsrtObjectTracker | None]   = [None] * n_obj
     validators: list[CompositeTrackingValidator] = [
@@ -195,8 +198,11 @@ def track_episode(
 
         for obj_idx in list(unseeded):
             label = vocab[obj_idx]
+            seed_embed: np.ndarray | None = None
             if object_prompts:
-                det_result = detector.detect(seed_frame, label, context_labels=_ctx(obj_idx))
+                det_result, embeds = detector.detect_with_embeddings(seed_frame, label, context_labels=_ctx(obj_idx))
+                if embeds:
+                    seed_embed = embeds[0]
             else:
                 bbox0 = _best_detect_box(det, obj_idx, seed_fi)
                 if bbox0 is not None:
@@ -204,7 +210,9 @@ def track_episode(
                         DetectedObject(label=label, score=1.0, bbox_2d=bbox0)
                     ])
                 else:
-                    det_result = detector.detect(seed_frame, label, context_labels=_ctx(obj_idx))
+                    det_result, embeds = detector.detect_with_embeddings(seed_frame, label, context_labels=_ctx(obj_idx))
+                    if embeds:
+                        seed_embed = embeds[0]
 
             if not det_result.detections:
                 continue
@@ -213,6 +221,8 @@ def track_episode(
             tracker.initialize(seed_frame, det_result)
             trackers[obj_idx] = tracker
             unseeded.discard(obj_idx)
+            if seed_embed is not None:
+                reid.register(obj_idx, seed_embed)
 
             seed_bbox = det_result.detections[0].bbox_2d
             out_boxes[seed_fi, obj_idx] = seed_bbox
@@ -247,16 +257,22 @@ def track_episode(
                 flags = FLAG_FROZEN
 
                 # Keep trying GDINO every frame until re-acquisition
-                new_det = detector.detect(frame, label, context_labels=_ctx(obj_idx))
+                new_det, new_embeds = detector.detect_with_embeddings(frame, label, context_labels=_ctx(obj_idx))
                 if new_det.detections:
-                    tracker.initialize(frame, new_det)
+                    if new_embeds and reid.is_same_object(obj_idx, new_embeds[0]):
+                        tracker.reinitialize(frame, new_det)
+                        reid.update(obj_idx, new_embeds[0])
+                    else:
+                        tracker.initialize(frame, new_det)
+                        id_switch_frames_list.append(fi)
+                        if new_embeds:
+                            reid.register(obj_idx, new_embeds[0])
                     validators[obj_idx].reset(tracker._track_id - 1)
                     bbox = new_det.detections[0].bbox_2d
                     last_valid_bbox[obj_idx] = bbox
                     frozen[obj_idx] = False
                     flags = FLAG_FORCED_REDET
                     recovery_frames_list.append(fi)
-                    id_switch_frames_list.append(fi)
 
             else:
                 # ── Normal: run CSRT update ───────────────────────────────────
@@ -278,21 +294,27 @@ def track_episode(
                     last_valid_bbox[obj_idx] = bbox  # None if CSRT already lost it
 
                     # Try GDINO immediately — may recover in the same frame
-                    new_det = detector.detect(frame, label, context_labels=_ctx(obj_idx))
+                    new_det, new_embeds = detector.detect_with_embeddings(frame, label, context_labels=_ctx(obj_idx))
                     if new_det.detections:
                         old_track_id = (
                             tracking_result.tracked_objects[0].track_id
                             if tracking_result.tracked_objects
                             else tracker._track_id
                         )
-                        tracker.initialize(frame, new_det)
+                        if new_embeds and reid.is_same_object(obj_idx, new_embeds[0]):
+                            tracker.reinitialize(frame, new_det)
+                            reid.update(obj_idx, new_embeds[0])
+                        else:
+                            tracker.initialize(frame, new_det)
+                            id_switch_frames_list.append(fi)
+                            if new_embeds:
+                                reid.register(obj_idx, new_embeds[0])
                         validators[obj_idx].reset(old_track_id)
                         bbox = new_det.detections[0].bbox_2d
                         last_valid_bbox[obj_idx] = bbox
                         frozen[obj_idx] = False
                         flags |= FLAG_FORCED_REDET
                         recovery_frames_list.append(fi)
-                        id_switch_frames_list.append(fi)
                 else:
                     last_valid_bbox[obj_idx] = bbox
 
