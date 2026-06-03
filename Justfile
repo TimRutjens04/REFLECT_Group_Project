@@ -136,6 +136,17 @@ notebook:
 gui:
     poetry run streamlit run code/gui.py
 
+# ── Depth estimation ──────────────────────────────────────────────────────────
+
+# Run Depth Anything V2 Metric Indoor (small) on a video, e.g:
+#   just depth-video visuals/reid_can_demo.mp4
+depth-video video:
+    {{python}} code/depth_video.py "{{video}}"
+
+# Same but with the large model for higher accuracy
+depth-video-large video:
+    {{python}} code/depth_video.py "{{video}}" --model large
+
 # ── Inspection ────────────────────────────────────────────────────────────────
 
 # Inspect raw data layout
