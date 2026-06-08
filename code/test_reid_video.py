@@ -29,6 +29,8 @@ import sys
 import cv2
 import numpy as np
 
+from tracking_log import TrackingLog
+
 ROOT    = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 VIS_DIR = os.path.join(ROOT, "visuals", "reid_test")
 
@@ -295,7 +297,7 @@ def main() -> None:
     cv2.putText(f0, "frame 0000", (8, h - 10), font, font_scale * 0.7, _GRAY, thickness)
     writer.write(f0)
 
-    # ── CSV setup ─────────────────────────────────────────────────────────────
+    # ── CSV + JSON log setup ──────────────────────────────────────────────────
     csv_file   = open(csv_path, "w", newline="")
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow([
@@ -308,6 +310,19 @@ def main() -> None:
         0, "SEEDED", *seed_bbox.astype(int).tolist(),
         int(seed_area), 1.0, 0.0, 0, 1.0, 0, 0,
     ])
+
+    log      = TrackingLog(sequence_id=video_stem)
+    json_path = os.path.join(os.path.dirname(out_path), f"{stem}_log.json")
+    log.record(
+        frame_id=0, timestamp=0.0,
+        object_id=f"{label}_0", label=label,
+        bbox_xyxy=seed_bbox.astype(int).tolist(),
+        tracker_confidence=1.0, tracker_status="seeded",
+        bbox_size_change_flag=False, drift_flag=False,
+        recovery_trigger=False, held_by_gripper=False,
+        last_detection_frame=0,
+    )
+    last_detection_frame_idx = 0
 
     # ── Track ─────────────────────────────────────────────────────────────────
     fi            = 1
@@ -478,11 +493,30 @@ def main() -> None:
             gdino_n_filtered,
         ])
 
+        # ── JSON log record ───────────────────────────────────────────────────
+        if state_label in ("RECOVERED", "REDETECTED"):
+            last_detection_frame_idx = fi
+        log.record(
+            frame_id=fi,
+            timestamp=fi / src_fps,
+            object_id=f"{label}_0",
+            label=label,
+            bbox_xyxy=[bx1, by1, bx2, by2] if row_bbox is not None else [],
+            tracker_confidence=float(last_conf) if last_conf is not None else 0.0,
+            tracker_status=state_label.lower(),
+            bbox_size_change_flag=(last_area_ratio is not None and last_area_ratio < (1 - 0.90)),
+            drift_flag=(last_drift_px is not None and last_drift_px > 150.0),
+            recovery_trigger=state_label in ("RECOVERED", "REDETECTED"),
+            held_by_gripper=False,
+            last_detection_frame=last_detection_frame_idx,
+        )
+
         fi += 1
 
     cap.release()
     writer.release()
     csv_file.close()
+    log.save_json(json_path)
 
     print(f"\n── Summary ──────────────────────────────────────────────────────")
     print(f"  frames tracked : {fi}")
@@ -491,6 +525,7 @@ def main() -> None:
     print(f"  final track_id : #{tracker._track_id}")
     print(f"  output video   : {out_path}")
     print(f"  log CSV        : {csv_path}")
+    print(f"  log JSON       : {json_path}")
 
 
 if __name__ == "__main__":

@@ -34,8 +34,10 @@ Usage:
 import os
 import sys
 import time
+from collections import deque
 
 import numpy as np
+import zarr
 from tqdm import tqdm
 
 from detector import GroundingDinoDetector
@@ -43,22 +45,26 @@ from frame_provider import AlignedEpisodeFrameProvider
 from interfaces import DetectedObject, DetectionResult, ObjectDetector
 from reid import ObjectReIdMatcher
 from tracker import CsrtObjectTracker
+from tracking_log import TrackingLog
 from validator import CompositeTrackingValidator
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-ROOT        = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-DETECT_DIR  = os.path.join(ROOT, "detect")
-ALIGNED_DIR = os.path.join(ROOT, "aligned")
-DEPTH_DIR   = os.path.join(ROOT, "depth_state")
-TRACK_DIR   = os.path.join(ROOT, "track")
+ROOT          = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DETECT_DIR    = os.path.join(ROOT, "detect")
+ALIGNED_DIR   = os.path.join(ROOT, "aligned")
+DEPTH_DIR     = os.path.join(ROOT, "depth_state")
+TRACK_DIR     = os.path.join(ROOT, "track")
+REAL_DATA_DIR = os.path.join(ROOT, "data", "real_data")
 
 # ── Thresholds (tune against RoboFail ground truth) ───────────────────────────
 
-AREA_CHANGE_THRESH = 0.50   # flag if bbox area changes > 50 % of init area
-DRIFT_THRESH_PX    = 30     # flag if centroid moves > 30 px from previous frame
-DEPTH_JUMP_THRESH  = 0.30   # flag if mean depth inside box changes > 0.30 m (stub)
-REDETECT_INTERVAL  = 30     # force GDINO re-detection after this many frames
+AREA_CHANGE_THRESH   = 0.50   # flag if bbox area changes > 50 % of init area
+DRIFT_THRESH_PX      = 30     # flag if centroid moves > 30 px from previous frame
+DEPTH_JUMP_THRESH    = 0.30   # flag if mean depth inside box changes > 0.30 m
+REDETECT_INTERVAL    = 30     # force GDINO re-detection after this many frames
+GRIP_APPROACH_WINDOW = 10     # frames of depth history for held-object attribution
+GRIPPER_CLOSED_STATE = 4      # gripper_state: 0=open, 1=closing, 4=gripping, 5=opening
 GDINO_MODEL_ID     = "IDEA-Research/grounding-dino-base"
 GDINO_SCORE_THRESH = 0.30
 
@@ -108,6 +114,59 @@ def _best_detect_box(det: dict, obj_idx: int, frame_idx: int) -> np.ndarray | No
         return None
     best = int(scores[mask].argmax())
     return boxes[mask][best].astype(np.float32)
+
+
+def _load_gripper_state(
+    episode_id: str,
+    frame_timestamps: np.ndarray,
+) -> np.ndarray:
+    """Return bool (N,) array — True when gripper is closed at each aligned frame.
+    Falls back to all-False when no Zarr replay buffer exists (sim/demo episodes)."""
+    n = len(frame_timestamps)
+    zarr_path = os.path.join(REAL_DATA_DIR, episode_id, "replay_buffer.zarr")
+    if not os.path.exists(zarr_path):
+        return np.zeros(n, dtype=bool)
+    try:
+        z         = zarr.open(zarr_path)
+        zarr_ts   = z["data/timestamp"][:]
+        zarr_gs   = z["data/gripper_state"][:]
+        indices   = np.searchsorted(zarr_ts, frame_timestamps).clip(0, len(zarr_ts) - 1)
+        return (zarr_gs[indices] == GRIPPER_CLOSED_STATE).astype(bool)
+    except Exception as e:
+        print(f"  [warn] could not load gripper state for {episode_id}: {e}")
+        return np.zeros(n, dtype=bool)
+
+
+def _identify_held_object(
+    n_obj: int,
+    centroid_depth_history: dict[int, deque],
+    confidences: list[float],
+) -> int | None:
+    """Return the obj_idx most likely being held based on approach motion in depth.
+
+    Picks the object whose centroid depth dropped the most over the last
+    GRIP_APPROACH_WINDOW frames (moved closest to camera = gripper approached it).
+    Tiebreaks by highest tracking confidence.
+    Returns None if no depth data is available (blanket suppression fallback).
+    """
+    best_idx   = None
+    best_drop  = -float("inf")
+    best_conf  = -1.0
+    any_depth  = False
+
+    for obj_idx in range(n_obj):
+        hist = list(centroid_depth_history.get(obj_idx, []))
+        if len(hist) < 2 or all(d == 0.0 for d in hist):
+            continue
+        any_depth = True
+        depth_drop = hist[0] - hist[-1]   # positive = moved closer
+        conf = confidences[obj_idx]
+        if depth_drop > best_drop or (depth_drop == best_drop and conf > best_conf):
+            best_drop = depth_drop
+            best_conf = conf
+            best_idx  = obj_idx
+
+    return best_idx if any_depth else None
 
 
 # ── Per-episode tracking ───────────────────────────────────────────────────────
@@ -178,6 +237,23 @@ def track_episode(
         for _ in range(n_obj)
     ]
 
+    # ── Gripper state ─────────────────────────────────────────────────────────
+    gripper_closed = _load_gripper_state(episode_id, timestamps)
+    has_gripper    = gripper_closed.any()
+    if has_gripper:
+        print(f"    gripper data loaded — {gripper_closed.sum()} closed frames")
+
+    # Per-object depth history for held-object attribution
+    centroid_depth_history: dict[int, deque] = {
+        i: deque(maxlen=GRIP_APPROACH_WINDOW) for i in range(n_obj)
+    }
+    held_by_gripper_active: list[bool] = [False] * n_obj
+    held_obj_idx: int | None = None
+
+    # Per-object log state
+    last_detection_frame: list[int] = [0] * n_obj
+    log = TrackingLog(sequence_id=episode_id)
+
     # ── Seed each tracker ─────────────────────────────────────────────────────
     # Build per-object context: every other label acts as a negative category so
     # GDINO can disambiguate (e.g. "pot" vs "fridge" in one prompt).
@@ -246,27 +322,63 @@ def track_episode(
     for fi in tqdm(range(1, n), desc=episode_id, leave=False):
         frame = provider.get_frame(fi)
 
+        # ── Gripper transition detection (once per frame, before per-object loop)
+        prev_closed = gripper_closed[fi - 1]
+        curr_closed = gripper_closed[fi]
+
+        if curr_closed and not prev_closed:
+            # Gripper just closed — attribute the held object
+            confs = [float(out_conf[fi - 1, i]) for i in range(n_obj)]
+            held_obj_idx = _identify_held_object(n_obj, centroid_depth_history, confs)
+            if held_obj_idx is not None:
+                held_by_gripper_active[held_obj_idx] = True
+                frozen[held_obj_idx] = True
+            else:
+                # No depth data — blanket suppression
+                for i in range(n_obj):
+                    held_by_gripper_active[i] = True
+                    frozen[i] = True
+
+        elif not curr_closed and prev_closed:
+            # Gripper opened — release held objects back to normal frozen state
+            for i in range(n_obj):
+                if held_by_gripper_active[i]:
+                    held_by_gripper_active[i] = False
+                    # Remains frozen=True; GDINO will re-acquire on next frame
+
         for obj_idx, label in enumerate(vocab):
             tracker = trackers[obj_idx]
             if tracker is None:
                 continue
 
-            if frozen[obj_idx]:
-                # ── Frozen: model is preserved; hold last valid position ──────
-                bbox  = last_valid_bbox[obj_idx]
-                flags = FLAG_FROZEN
+            bbox           = last_valid_bbox[obj_idx]
+            flags          = 0
+            tracker_status = "ok"
 
-                # Keep trying GDINO every frame until re-acquisition
+            if held_by_gripper_active[obj_idx]:
+                # ── Held: suppress GDINO, freeze position ────────────────────
+                flags          = FLAG_FROZEN
+                tracker_status = "held"
+                out_held[fi, obj_idx] = True
+
+            elif frozen[obj_idx]:
+                # ── Frozen: model preserved; try GDINO every frame ───────────
+                flags          = FLAG_FROZEN
+                tracker_status = "searching"
+
                 new_det, new_embeds = detector.detect_with_embeddings(frame, label, context_labels=_ctx(obj_idx))
                 if new_det.detections:
+                    last_detection_frame[obj_idx] = fi
                     if new_embeds and reid.is_same_object(obj_idx, new_embeds[0]):
                         tracker.reinitialize(frame, new_det)
                         reid.update(obj_idx, new_embeds[0])
+                        tracker_status = "recovered"
                     else:
                         tracker.initialize(frame, new_det)
                         id_switch_frames_list.append(fi)
                         if new_embeds:
                             reid.register(obj_idx, new_embeds[0])
+                        tracker_status = "redetected"
                     validators[obj_idx].reset(tracker._track_id - 1)
                     bbox = new_det.detections[0].bbox_2d
                     last_valid_bbox[obj_idx] = bbox
@@ -278,7 +390,6 @@ def track_episode(
                 # ── Normal: run CSRT update ───────────────────────────────────
                 tracking_result = tracker.track(frame)
 
-                flags = 0
                 if not tracking_result.tracked_objects:
                     flags |= FLAG_CSRT_FAIL
                     bbox = None
@@ -288,14 +399,22 @@ def track_episode(
                         flags |= _reason_to_flags(val_result.reason)
                     bbox = tracking_result.tracked_objects[0].bbox_2d
 
-                if flags:
-                    # Freeze: stop updating the model from here on
-                    frozen[obj_idx] = True
-                    last_valid_bbox[obj_idx] = bbox  # None if CSRT already lost it
+                    # Update centroid depth history for gripper attribution
+                    cx = (bbox[0] + bbox[2]) / 2.0
+                    cy = (bbox[1] + bbox[3]) / 2.0
+                    h, w = frame.depth.shape[:2]
+                    xi = int(np.clip(cx, 0, w - 1))
+                    yi = int(np.clip(cy, 0, h - 1))
+                    centroid_depth_history[obj_idx].append(float(frame.depth[yi, xi]))
 
-                    # Try GDINO immediately — may recover in the same frame
+                if flags:
+                    tracker_status = "frozen"
+                    frozen[obj_idx] = True
+                    last_valid_bbox[obj_idx] = bbox
+
                     new_det, new_embeds = detector.detect_with_embeddings(frame, label, context_labels=_ctx(obj_idx))
                     if new_det.detections:
+                        last_detection_frame[obj_idx] = fi
                         old_track_id = (
                             tracking_result.tracked_objects[0].track_id
                             if tracking_result.tracked_objects
@@ -304,11 +423,13 @@ def track_episode(
                         if new_embeds and reid.is_same_object(obj_idx, new_embeds[0]):
                             tracker.reinitialize(frame, new_det)
                             reid.update(obj_idx, new_embeds[0])
+                            tracker_status = "recovered"
                         else:
                             tracker.initialize(frame, new_det)
                             id_switch_frames_list.append(fi)
                             if new_embeds:
                                 reid.register(obj_idx, new_embeds[0])
+                            tracker_status = "redetected"
                         validators[obj_idx].reset(old_track_id)
                         bbox = new_det.detections[0].bbox_2d
                         last_valid_bbox[obj_idx] = bbox
@@ -318,13 +439,29 @@ def track_episode(
                 else:
                     last_valid_bbox[obj_idx] = bbox
 
-            # Write outputs
+            # ── Write per-frame arrays ────────────────────────────────────────
             out_flags[fi, obj_idx] = np.uint8(flags)
             if bbox is not None:
                 out_boxes[fi, obj_idx] = bbox
                 out_tids[fi,  obj_idx] = obj_idx
                 n_bits = bin(flags).count("1")
                 out_conf[fi, obj_idx] = max(0.0, 1.0 - 0.25 * n_bits)
+
+            # ── Log record ────────────────────────────────────────────────────
+            log.record(
+                frame_id=fi,
+                timestamp=float(timestamps[fi]),
+                object_id=f"{label}_{obj_idx}",
+                label=label,
+                bbox_xyxy=bbox.astype(int).tolist() if bbox is not None else [],
+                tracker_confidence=float(out_conf[fi, obj_idx]),
+                tracker_status=tracker_status,
+                bbox_size_change_flag=bool(flags & FLAG_AREA_CHANGE),
+                drift_flag=bool(flags & FLAG_DRIFT),
+                recovery_trigger=bool(flags & FLAG_FORCED_REDET),
+                held_by_gripper=bool(out_held[fi, obj_idx]),
+                last_detection_frame=last_detection_frame[obj_idx],
+            )
 
     recovery_arr  = np.array(sorted(set(recovery_frames_list)), dtype=np.int32)
     id_switch_arr = np.array(sorted(set(id_switch_frames_list)), dtype=np.int32)
@@ -343,6 +480,9 @@ def track_episode(
         fps_base            = np.float64(fps_base),
         label_vocab         = np.array(vocab),
     )
+
+    log_path = out_path.replace(".npz", "_log.json")
+    log.save_json(log_path)
 
     elapsed = time.perf_counter() - t0
     print(
