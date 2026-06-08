@@ -369,6 +369,7 @@ def track_episode(
                 new_det, new_embeds = detector.detect_with_embeddings(frame, label, context_labels=_ctx(obj_idx))
                 if new_det.detections:
                     last_detection_frame[obj_idx] = fi
+                    old_track_id = tracker._track_id
                     if new_embeds and reid.is_same_object(obj_idx, new_embeds[0]):
                         tracker.reinitialize(frame, new_det)
                         reid.update(obj_idx, new_embeds[0])
@@ -379,7 +380,7 @@ def track_episode(
                         if new_embeds:
                             reid.register(obj_idx, new_embeds[0])
                         tracker_status = "redetected"
-                    validators[obj_idx].reset(tracker._track_id - 1)
+                    validators[obj_idx].reset(old_track_id)
                     bbox = new_det.detections[0].bbox_2d
                     last_valid_bbox[obj_idx] = bbox
                     frozen[obj_idx] = False

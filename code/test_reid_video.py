@@ -386,6 +386,7 @@ def main() -> None:
                     sim     = float("nan")
                     is_same = False
 
+                old_track_id = tracker._track_id
                 if is_same:
                     same_id_count += 1
                     tracker.reinitialize(frame, new_det)
@@ -405,7 +406,7 @@ def main() -> None:
                     )
                     state_label = "REDETECTED"
 
-                validator.reset(tracker._track_id - 1)
+                validator.reset(old_track_id)
                 frozen        = False
                 last_bbox     = new_det.detections[0].bbox_2d
                 row_bbox      = last_bbox
