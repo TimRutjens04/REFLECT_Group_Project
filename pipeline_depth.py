@@ -44,7 +44,7 @@ from typing import Any
 
 import cv2
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyArrowPatch
+from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 import numpy as np
 import pandas as pd
 
@@ -173,27 +173,45 @@ def relation_offsets(edges: list[dict[str, Any]], positions: dict[str, tuple[flo
     return offsets
 
 
-def stable_snapshot_layout(object_ids: list[str]) -> dict[str, tuple[float, float]]:
-    """Place objects in a fixed mini-graph layout so timelines are easy to compare."""
-    count = len(object_ids)
-    if count == 1:
-        return {object_ids[0]: (0.0, 0.0)}
-    if count == 2:
-        base_positions = [(-0.38, -0.20), (0.38, 0.20)]
-    elif count == 3:
-        base_positions = [(-0.38, -0.24), (0.38, -0.24), (0.0, 0.30)]
-    elif count == 4:
-        base_positions = [(-0.42, -0.28), (0.42, -0.28), (-0.42, 0.28), (0.42, 0.28)]
-    else:
-        radius_x, radius_y = 0.46, 0.30
-        base_positions = [
-            (
-                radius_x * math.cos((2.0 * math.pi * index / count) - math.pi / 2.0),
-                radius_y * math.sin((2.0 * math.pi * index / count) - math.pi / 2.0),
-            )
-            for index in range(count)
-        ]
-    return {object_id: base_positions[index] for index, object_id in enumerate(object_ids)}
+def timeline_object_layout(graph_frames, keyframes: list[int], snapshot_width: float, snapshot_height: float) -> dict[str, tuple[float, float]]:
+    """Stable REFLECT-style card layout, bounded inside each mini graph."""
+    centers: defaultdict[str, list[tuple[float, float]]] = defaultdict(list)
+    for index in keyframes:
+        for node in graph_frames[index]["nodes"]:
+            u, v = node["pixel_center"]
+            centers[node["object_id"]].append((float(u), float(v)))
+    means = {
+        object_id: (
+            float(np.mean([point[0] for point in points])),
+            float(np.mean([point[1] for point in points])),
+        )
+        for object_id, points in centers.items()
+    }
+    if not means:
+        return {}
+    xs = [point[0] for point in means.values()]
+    ys = [point[1] for point in means.values()]
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    x_span = max(1.0, x_max - x_min)
+    y_span = max(1.0, y_max - y_min)
+    x_scale = snapshot_width * 0.68
+    y_scale = snapshot_height * 0.68
+    layout = {
+        object_id: (
+            ((u - x_min) / x_span - 0.5) * x_scale,
+            (0.5 - (v - y_min) / y_span) * y_scale,
+        )
+        for object_id, (u, v) in means.items()
+    }
+    if len(layout) > 1:
+        ys_layout = [point[1] for point in layout.values()]
+        if max(ys_layout) - min(ys_layout) < snapshot_height * 0.22:
+            ordered = sorted(layout, key=lambda object_id: layout[object_id][0])
+            for rank, object_id in enumerate(ordered):
+                offset = (rank / max(1, len(ordered) - 1) - 0.5) * snapshot_height * 0.46
+                layout[object_id] = (layout[object_id][0], offset)
+    return layout
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
@@ -620,7 +638,17 @@ class PipelineDepth:
         ax.invert_yaxis()
         ax.set_xlabel("image x")
         ax.set_ylabel("image y")
-        colors = {"near": "#f4a261", "inside": "#2a9d8f", "on_top_of": "#e76f51", "left/right": "#8ab17d", "above/below": "#457b9d"}
+        colors = {
+            "near": "#f4a261",
+            "inside": "#2a9d8f",
+            "on_top_of": "#e76f51",
+            "left_of": "#8ab17d",
+            "right_of": "#8ab17d",
+            "above": "#457b9d",
+            "below": "#457b9d",
+            "left/right": "#8ab17d",
+            "above/below": "#457b9d",
+        }
         display_edges = relation_display_edges(graph["edges"], {"near", "inside", "on_top_of", "left_of", "right_of", "above", "below"})
         offsets = relation_offsets(display_edges, pos, scale=20.0)
         for edge_index, edge in enumerate(display_edges):
@@ -633,11 +661,11 @@ class PipelineDepth:
             x1, y1, x2, y2 = x1 + ox, y1 + oy, x2 + ox, y2 + oy
             arrow = FancyArrowPatch((x1, y1), (x2, y2), arrowstyle="->", mutation_scale=10, linewidth=1.4, color=colors.get(relation, "#555555"), alpha=0.75)
             ax.add_patch(arrow)
-            ax.text((x1 + x2) / 2, (y1 + y2) / 2, relation, fontsize=7, color=colors.get(relation, "#555555"), bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.65, "pad": 0.3})
+            ax.text((x1 + x2) / 2, (y1 + y2) / 2, relation, fontsize=10, color=colors.get(relation, "#555555"), bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.65, "pad": 0.3})
         for node in nodes:
             x, y = pos[node["object_id"]]
             ax.scatter([x], [y], s=180, color="#90be6d", edgecolor="black", zorder=3)
-            ax.text(x + 5, y + 5, node["object_id"], fontsize=8)
+            ax.text(x + 7, y + 7, node["object_id"], fontsize=12)
         ax.grid(alpha=0.2)
         fig.tight_layout()
         fig.savefig(output_path, dpi=170)
@@ -649,27 +677,40 @@ class PipelineDepth:
             return
         object_colors = {object_id: plt.cm.Set2(i % 8) for i, object_id in enumerate(object_ids)}
         relation_colors = {"near": "#f4a261", "inside": "#2a9d8f", "on_top_of": "#e76f51", "left/right": "#8ab17d", "above/below": "#457b9d"}
-        base_layout = stable_snapshot_layout(object_ids)
-        column_spacing = 2.25
-        snapshot_width = 1.55
-        snapshot_height = 1.02
-        fig, ax = plt.subplots(figsize=(max(18, len(keyframes) * 4.8), 6.8))
-        previous_positions: dict[str, tuple[float, float]] = {}
+        column_spacing = 2.7
+        snapshot_width = 1.95
+        snapshot_height = 1.22
+        fig, ax = plt.subplots(figsize=(max(18, len(keyframes) * 5.5), 7.2))
+        fig.patch.set_facecolor("#ffffff")
+        ax.set_facecolor("#ffffff")
+        card_colors = ["#1f5bd8", "#a40000", "#2f6f1e"]
+        card_layout = timeline_object_layout(graph_frames, keyframes, snapshot_width, snapshot_height)
         for col, index in enumerate(keyframes):
             graph = graph_frames[index]
             nodes = graph["nodes"]
             if not nodes:
-                previous_positions = {}
                 continue
             positions = {
                 node["object_id"]: (
-                    col * column_spacing + base_layout[node["object_id"]][0],
-                    base_layout[node["object_id"]][1],
+                    col * column_spacing + card_layout[node["object_id"]][0],
+                    card_layout[node["object_id"]][1],
                 )
                 for node in nodes
-                if node["object_id"] in base_layout
+                if node["object_id"] in card_layout
             }
-            ax.add_patch(plt.Rectangle((col * column_spacing - snapshot_width / 2 - 0.06, -snapshot_height / 2 - 0.06), snapshot_width + 0.12, snapshot_height + 0.12, fill=False, color="#dddddd", linewidth=1, zorder=0))
+            ax.add_patch(
+                FancyBboxPatch(
+                    (col * column_spacing - snapshot_width / 2 - 0.06, -snapshot_height / 2 - 0.06),
+                    snapshot_width + 0.12,
+                    snapshot_height + 0.12,
+                    boxstyle="round,pad=0.035,rounding_size=0.04",
+                    facecolor="#ffffff",
+                    edgecolor=card_colors[col % len(card_colors)],
+                    linewidth=2.6,
+                    alpha=0.98,
+                    zorder=0,
+                )
+            )
             display_edges = relation_display_edges(graph["edges"], {"near", "inside", "on_top_of", "left_of", "right_of", "above", "below"})
             offsets = relation_offsets(display_edges, positions, scale=0.045)
             for edge_index, edge in enumerate(display_edges):
@@ -680,28 +721,25 @@ class PipelineDepth:
                 x1, y1 = positions[edge["from"]]
                 x2, y2 = positions[edge["to"]]
                 x1, y1, x2, y2 = x1 + ox, y1 + oy, x2 + ox, y2 + oy
-                ax.plot([x1, x2], [y1, y2], color=relation_colors.get(relation, "#555555"), linewidth=1.7, alpha=0.72)
-                ax.text((x1 + x2) / 2, (y1 + y2) / 2, relation, fontsize=7, color=relation_colors.get(relation, "#555555"), ha="center", va="center", bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.72, "pad": 0.35})
+                ax.plot([x1, x2], [y1, y2], color="#202124", linewidth=2.3, alpha=0.82, solid_capstyle="round", zorder=1)
+                ax.text((x1 + x2) / 2, (y1 + y2) / 2, relation, fontsize=10.0, color=relation_colors.get(relation, "#555555"), ha="center", va="center", bbox={"boxstyle": "round,pad=0.16", "facecolor": "#ffffff", "edgecolor": "none", "alpha": 0.9})
             for object_id, (x, y) in positions.items():
-                if object_id in previous_positions:
-                    px, py = previous_positions[object_id]
-                    ax.plot([px, x], [py, y], color="#888888", linestyle="--", linewidth=1.0, alpha=0.55)
-                ax.scatter(x, y, s=170, color=object_colors[object_id], edgecolor="black", zorder=3)
-                ax.text(x + 0.04, y + 0.04, object_id, fontsize=8)
-            ax.text(col * column_spacing, -0.68, f"t{col}\nf{graph['frame_id']}\n{graph['timestamp']:.0f}s", ha="center", va="top", fontsize=8)
-            previous_positions = positions
+                ax.scatter(x, y, s=460, color="#f8f9fa", edgecolor="#202124", linewidth=2.0, zorder=3)
+                ax.scatter(x, y, s=170, color=object_colors[object_id], edgecolor="none", alpha=0.85, zorder=4)
+                ax.text(x, y + 0.17, object_id, fontsize=11.0, color="#202124", ha="center", bbox={"boxstyle": "round,pad=0.16", "facecolor": "#ffffff", "edgecolor": "none", "alpha": 0.9})
+            ax.text(col * column_spacing, -0.74, f"t{col}\nf{graph['frame_id']}\n{graph['timestamp']:.0f}s", ha="center", va="top", fontsize=8.5, color="#333333")
         ax.set_xticks([col * column_spacing for col in range(len(keyframes))])
         ax.set_xticklabels([])
         ax.set_yticks([])
         ax.set_xlim(-1.1, max(1.0, (len(keyframes) - 1) * column_spacing + 1.1))
-        ax.set_ylim(-0.86, 0.76)
-        ax.set_xlabel("time / keyframes")
-        ax.set_title("Discrete-time dynamic scene graph over keyframes")
+        ax.set_ylim(-0.92, 0.84)
+        ax.set_xlabel("time / keyframes", fontsize=10.5, labelpad=12)
+        ax.set_title("Discrete-time dynamic scene graph over keyframes", fontsize=14, pad=18, color="#222222")
         handles = [plt.Line2D([0], [0], color=color, linewidth=2, label=label) for label, color in relation_colors.items()]
-        handles.append(plt.Line2D([0], [0], color="#888888", linestyle="--", linewidth=1, label="same object over time"))
-        ax.legend(handles=handles, loc="upper center", ncol=max(1, len(handles)), fontsize=8, frameon=False)
+        ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 1.02), ncol=max(1, len(handles)), fontsize=8.5, frameon=False)
         ax.spines[["left", "right", "top"]].set_visible(False)
-        ax.grid(axis="x", alpha=0.12)
+        ax.spines["bottom"].set_color("#8a8a8a")
+        ax.grid(False)
         fig.tight_layout()
         fig.savefig(output_path, dpi=180)
         plt.close(fig)
