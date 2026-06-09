@@ -59,7 +59,6 @@ Thumbs.db
 
 # Project-specific
 .claude/
-data/
 aligned/
 encoded/
 owl/

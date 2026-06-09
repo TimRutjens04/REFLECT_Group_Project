@@ -33,7 +33,7 @@ class CompositeTrackingValidator(TrackingValidator):
         self,
         area_change_thresh: float = 0.50,
         drift_thresh_px: float = 30.0,
-        depth_jump_thresh: float = 0.30,
+        depth_jump_thresh: float = 10,
         redetect_interval: int = 30,
         area_check_grace_frames: int = 5,
     ) -> None:

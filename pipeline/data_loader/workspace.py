@@ -21,6 +21,5 @@ def setup_workspace(data_dir: Path, work_dir: Path | None = None) -> Path:
 
     for sub in ("state_summary", "images", "scene"):
         (rw_root / sub).mkdir(exist_ok=True)
-    (work_dir / "LLM").mkdir(exist_ok=True)
 
     return rw_root
