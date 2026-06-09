@@ -1,0 +1,26 @@
+[project]
+name = "pipeline"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "decord>=0.6.0",
+    "imagecodecs>=2026.3.6",
+    "lmdb>=2.2.0",
+    "matplotlib>=3.10.9",
+    "numpy>=2.4.5",
+    "opencv-contrib-python>=4.13.0.86",
+    "peft>=0.19.1",
+    "pillow>=12.2.0",
+    "scikit-learn>=1.8.0",
+    "tdqm>=0.0.1",
+    "torch>=2.12.0",
+    "torchvision>=0.27.0",
+    "transformers==4.57.1",
+    "ultralytics>=8.4.59",
+    "zarr>=3.1.6",
+]
+
+[tool.ruff.lint.isort]
+known-third-party = ["cv2", "imagecodecs", "matplotlib", "numpy", "PIL", "sklearn", "torch", "torchvision", "transformers", "zarr"]

@@ -1,0 +1,31 @@
+tracker:
+  backend: csrt   # csrt | sam2
+
+gdino:
+  model_id: IDEA-Research/grounding-dino-base
+  score_thresh: 0.30
+  # Run GDINO every K frames; trackers use internal motion model in between.
+  detection_interval: 50
+
+reid:
+  # Weighted distance: d = iou_weight*(1-IoU) + appearance_weight*cosine_dist
+  iou_weight: 0.5
+  appearance_weight: 0.5
+  # Minimum similarity to accept a re-ID match (0=accept anything, 1=perfect match)
+  similarity_threshold: 0.60
+  # OSNet variant — osnet_x0_25 (fastest) / osnet_x0_5 / osnet_x1_0 (most accurate)
+  osnet_variant: osnet_x0_25
+
+bytetrack:
+  track_activation_threshold: 0.25
+  lost_track_buffer: 60
+  minimum_matching_threshold: 0.50
+
+benchmark:
+  # IoU threshold for counting a frame as a True Positive
+  iou_match_thresh: 0.50
+  output_dir: results/benchmark
+  visualize: true
+  playback_fps: 30
+  # GDINO interval for pseudo-GT generation (every N frames). 10 = ~270 calls on a 2733-frame video.
+  pseudo_gt_interval: 10
