@@ -32,7 +32,7 @@ class GroundingDinoDetector(ObjectDetector):
         if self.model is not None:
             return
         self.device = self.config.device or (
-            "cuda" if torch.cuda.is_available() else "cpu"
+            "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
         )
         self.processor = AutoProcessor.from_pretrained(self.config.model_id)
         self.model = AutoModelForZeroShotObjectDetection.from_pretrained(

@@ -59,7 +59,6 @@ Thumbs.db
 
 # Project-specific
 .claude/
-data/
 aligned/
 encoded/
 owl/
@@ -78,3 +77,8 @@ secrets.json
 
 # Result visuals
 results/
+
+# Pipeline Yoloe
+pipeline/real_world/*
+pipeline/real_world
+pipeline/yoloe-11l-seg.pt

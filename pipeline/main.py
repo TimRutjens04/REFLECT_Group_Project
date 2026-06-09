@@ -17,8 +17,9 @@ from detector.locateanything import LocateAnythingDetector
 
 
 def main():
-    setup_workspace(Path("/home/coder/datasets"))
-    loader = TaskLoader(Path("/home/coder/datasets"))
+    data_dir = Path(__file__).resolve().parents[1] / "example_data"
+    setup_workspace(data_dir)
+    loader = TaskLoader(data_dir)
     task = loader.get(1)
     provider = VideoRgbdFrameProvider(task)
 
@@ -53,37 +54,36 @@ def main():
     print(f"Detection result: {detection_result}")
     print(f"Saved detection image to {detection_path.resolve()}")
 
-    # --- Debug: YOLOe visual-prompt predict on frame 0 ---
     color_video = provider.color_path
 
     tracked_output = Path("real_world/videos") / f"tracked_{task.folder_name}.mp4"
-    # track_video_with_yoloe_redetect(
-    #     video_path=color_video,
-    #     initial_detection_result=detection_result,
-    #     output_path=tracked_output,
-    #     frame_step=1,
-    #     sequence_id=task.folder_name,
-    #     detection_writer=detection_writer,
-    #     tracking_writer=tracking_writer,
-    #     redetect_every_n_frames=30,
-    #     provider=provider,
-    #     detection_runner=runner,
-    #     task=task,
-    #     redetect_on_lost=False,
-    #     redetect_on_invalid=True,
-    #     validator=CompositeTrackingValidator(),
-    #     validate_with_depth=True,
-    # )
-    track_video_with_yoloe(
+    track_video_with_yoloe_redetect(
         video_path=color_video,
-        detection_result=detection_result,
-        output_path=Path("real_world/videos")
-        / f"tracked_no_redetect_{task.folder_name}.mp4",
+        initial_detection_result=detection_result,
+        output_path=tracked_output,
         frame_step=1,
         sequence_id=task.folder_name,
         detection_writer=detection_writer,
         tracking_writer=tracking_writer,
+        redetect_every_n_frames=30,
+        provider=provider,
+        detection_runner=runner,
+        task=task,
+        redetect_on_lost=False,
+        redetect_on_invalid=True,
+        validator=CompositeTrackingValidator(),
+        validate_with_depth=True,
     )
+    # track_video_with_yoloe(
+    #     video_path=color_video,
+    #     detection_result=detection_result,
+    #     output_path=Path("real_world/videos")
+    #     / f"tracked_no_redetect_{task.folder_name}.mp4",
+    #     frame_step=1,
+    #     sequence_id=task.folder_name,
+    #     detection_writer=detection_writer,
+    #     tracking_writer=tracking_writer,
+    # )
     # tracked_output = Path("real_world/videos") / f"trackedsam2_{task.folder_name}.mp4"
     # track_video_with_sam2(
     #     video_path=color_video,

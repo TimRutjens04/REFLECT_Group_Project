@@ -1,0 +1,31 @@
+{
+    "chunks": [
+        1,
+        720,
+        1280
+    ],
+    "compressor": {
+        "decodingspeed": null,
+        "distance": null,
+        "effort": null,
+        "id": "imagecodecs_jpegxl",
+        "index": null,
+        "keeporientation": null,
+        "level": 80,
+        "lossless": false,
+        "numthreads": 2,
+        "photometric": null,
+        "planar": null,
+        "usecontainer": null
+    },
+    "dtype": "<u2",
+    "fill_value": 0,
+    "filters": null,
+    "order": "C",
+    "shape": [
+        2096,
+        720,
+        1280
+    ],
+    "zarr_format": 2
+}
