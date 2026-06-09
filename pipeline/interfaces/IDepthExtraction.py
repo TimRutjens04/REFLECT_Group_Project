@@ -9,7 +9,6 @@ import numpy as np
 from interfaces.IDetection import DetectionResult
 from interfaces.IFrameInput import RgbdFrame
 
-
 @dataclass
 class DepthObjectResult:
     label: str
