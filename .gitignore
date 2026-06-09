@@ -82,3 +82,10 @@ results/
 pipeline/real_world/*
 pipeline/real_world
 pipeline/yoloe-11l-seg.pt
+detect/
+scene_graphs/
+scene_graphs_pipeline/
+segment/
+track/
+visuals/
+depth/

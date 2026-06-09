@@ -36,6 +36,79 @@ encode:
 owl:
     {{python}} code/owl_detect.py
 
+# Run CSRT tracking on all episodes (detect/ → track/)
+track:
+    {{python}} code/track.py
+
+# Run CSRT tracking on a single episode, e.g: just track-one boilWater-1
+track-one episode:
+    {{python}} code/track.py {{episode}}
+
+# Force-rerun CSRT tracking on a single episode
+track-force-one episode:
+    {{python}} code/track.py {{episode}} --force
+
+# Render tracked bbox overlay video for all episodes (→ visuals/tracked/)
+visualize-track:
+    {{python}} code/visualize_track.py
+
+# Render tracked bbox overlay video for a single episode
+visualize-track-one episode:
+    {{python}} code/visualize_track.py {{episode}}
+
+# Benchmark CSRT vs ByteTrack vs ReID+Kalman on a single object (GDINO-driven), e.g:
+#   just benchmark occluded.mp4 "cooking pot"
+#   just benchmark occluded.mp4 "cooking pot" clean.mp4   (with GT companion video)
+benchmark video prompt gt_video="":
+    {{python}} code/benchmark/harness.py \
+        --video "{{video}}" \
+        --prompt "{{prompt}}" \
+        $([ -n "{{gt_video}}" ] && echo "--gt-video {{gt_video}}")
+
+# Benchmark N objects with manual bbox seed (no GDINO re-detection), e.g:
+#   just benchmark-multi occluded.mp4 "mug 1. mug 2"
+#   just benchmark-multi occluded.mp4 "mug 1. mug 2" clean.mp4 "coffee mug. coffee mug"
+benchmark-multi video labels gt_video="" prompts="":
+    {{python}} code/benchmark/harness_multi.py \
+        --video "{{video}}" \
+        --labels "{{labels}}" \
+        $([ -n "{{gt_video}}" ] && echo "--gt-video {{gt_video}}") \
+        $([ -n "{{prompts}}" ] && echo "--prompts {{prompts}}")
+
+# Benchmark with GDINO pseudo-GT for numerical metrics (MOTA, MOTP, FPS, etc.), e.g:
+#   just benchmark-num data/IMG_0081.MOV "coffee mug"
+benchmark-num video label:
+    {{python}} code/benchmark/harness_multi.py \
+        --video "{{video}}" \
+        --labels "{{label}}" \
+        --detect-prompts "{{label}}" \
+        --pseudo-gt "{{label}}"
+
+# Draw a bbox on frame 0, benchmark all 3 trackers with GDINO re-detection, play live, e.g:
+#   just benchmark-draw mug_video.mp4 "coffee mug"
+benchmark-draw video label:
+    {{python}} code/benchmark/harness_multi.py \
+        --video "{{video}}" \
+        --labels "{{label}}" \
+        --detect-prompts "{{label}}" \
+        --play
+
+# Manually seed CSRT from a drawn bbox and track through a video (no GDINO), e.g:
+#   just demo-track IMG_0081.MOV "coffee mug"
+demo-track video label:
+    {{python}} code/demo_track.py "{{video}}" --label "{{label}}"
+
+# Track and visualize a single named object, e.g: just track-object boilWater-1 "apple"
+track-object episode object:
+    {{python}} code/track.py {{episode}} --object "{{object}}" --force
+    {{python}} code/visualize_track.py {{episode}} --object "{{object}}"
+
+# Track and visualize multiple named objects (GDINO-style period-separated), e.g:
+#   just track-objects boilWater-1 "cooking pot. fridge. stove burner."
+track-objects episode objects:
+    {{python}} code/track.py {{episode}} --object "{{objects}}" --force
+    {{python}} code/visualize_track.py {{episode}} --object "{{objects}}"
+
 # Run OWL-ViT for a single episode by name, e.g: just owl-one appleInFridge1
 owl-one episode:
     {{python}} code/owl_detect.py {{episode}}
@@ -63,6 +136,17 @@ notebook:
 gui:
     poetry run streamlit run code/gui.py
 
+# ── Depth estimation ──────────────────────────────────────────────────────────
+
+# Run Depth Anything V2 Metric Indoor (small) on a video, e.g:
+#   just depth-video visuals/reid_can_demo.mp4
+depth-video video:
+    {{python}} code/depth_video.py "{{video}}"
+
+# Same but with the large model for higher accuracy
+depth-video-large video:
+    {{python}} code/depth_video.py "{{video}}" --model large
+
 # ── Inspection ────────────────────────────────────────────────────────────────
 
 # Inspect raw data layout
@@ -72,6 +156,12 @@ inspect:
 # Run sanity checks on aligned output
 sanity:
     {{python}} code/sanity_check.py
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+# Run all unit tests
+test:
+    poetry run pytest tests/ -v
 
 # ── Code quality ──────────────────────────────────────────────────────────────
 
