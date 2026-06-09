@@ -78,3 +78,12 @@ secrets.json
 
 # Result visuals
 results/
+visuals/
+
+# Pipeline stuff
+scene_graphs/
+scene_graphs_pipeline/
+segment/
+track/
+depth/
+detect/
