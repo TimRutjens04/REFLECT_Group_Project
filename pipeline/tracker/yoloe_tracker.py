@@ -9,11 +9,19 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from interfaces.ITrackingValidator import TrackingValidator
-from interfaces.IDetection import DetectionResult
+from interfaces.ITrackingValidator import TrackingValidator, ValidationResult
+from interfaces.IDetection import DetectedObject, DetectionResult
 from models.base import JsonlWriter
 from models.detection import TriggerReason
-from models.tracking import TrackedObject, TrackingFlags, TrackingFrame, TrackerStatus
+from models.tracking import (
+    ObjectFlags,
+    TrackedObject,
+    TrackingFlags,
+    TrackingFrame,
+    TrackerStatus,
+    ValidatedObject,
+    ValidationFrame,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -77,10 +85,37 @@ def _frame_depth_from_provider(provider, frame_idx: int) -> np.ndarray | None:
     return getattr(pf, "depth", None)
 
 
+def _dedupe_detections_by_label(
+    detections: list[DetectedObject],
+) -> list[DetectedObject]:
+    """Keep only the highest-score detection per label.
+
+    Same-label duplicates (e.g. two "apple" boxes) would otherwise each seed a
+    separate YOLOE class and BoTSORT track. Collapsing to the best-scoring box
+    per label yields one stable track per label and avoids the same-label track
+    churn that the per-track validator would otherwise misread as drift.
+
+    Label order follows first appearance so class ids stay stable/reproducible.
+    """
+    best: dict[str, DetectedObject] = {}
+    order: list[str] = []
+    for det in detections:
+        cur = best.get(det.label)
+        if cur is None:
+            order.append(det.label)
+            best[det.label] = det
+        elif det.score > cur.score:
+            best[det.label] = det
+    return [best[lbl] for lbl in order]
+
+
 def _detection_to_visual_prompts(
     detection_result: DetectionResult,
+    dedupe_by_label: bool = True,
 ) -> tuple[dict, list[str]]:
     dets = detection_result.detections
+    if dedupe_by_label:
+        dets = _dedupe_detections_by_label(dets)
 
     bboxes = np.array([d.bbox_2d for d in dets], dtype=np.float32)
     cls = np.arange(len(dets), dtype=np.int64)
@@ -102,6 +137,7 @@ def _prime_yoloe(
     frame_rgb: np.ndarray,
     detection_result: DetectionResult,
     conf: float,
+    dedupe_by_label: bool = True,
 ):
     from ultralytics import YOLOE
     from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
@@ -109,7 +145,9 @@ def _prime_yoloe(
     if not detection_result.success or not detection_result.detections:
         raise ValueError("Cannot prime YOLOE without detections.")
 
-    visual_prompts, label_names = _detection_to_visual_prompts(detection_result)
+    visual_prompts, label_names = _detection_to_visual_prompts(
+        detection_result, dedupe_by_label=dedupe_by_label
+    )
 
     model = YOLOE(model_name)
 
@@ -125,6 +163,55 @@ def _prime_yoloe(
     return model, label_names
 
 
+def _sticky_dedupe_keep(
+    result,
+    label_names: list[str],
+    sticky_ids: dict[str, int],
+) -> list[int]:
+    """Per-frame: keep one box per label, preferring the id kept last frame.
+
+    Among boxes sharing a label, the box whose ``track_id`` matches the id kept
+    for that label last frame is retained (so the id stays stable across
+    frames); if that track is gone, the highest-confidence box wins and becomes
+    the new sticky id. ``sticky_ids`` is updated in place; the returned list is
+    the box indices to keep (sorted, so original ordering is preserved).
+    """
+    boxes = result.boxes
+    if boxes is None or len(boxes) == 0:
+        return []
+
+    confs = boxes.conf.cpu().numpy()
+    clss = boxes.cls.cpu().numpy().astype(int)
+    ids = (
+        boxes.id.cpu().numpy().astype(int)
+        if boxes.id is not None
+        else np.full(len(boxes), -1, dtype=int)
+    )
+
+    by_label: dict[str, list[int]] = {}
+    for i, c in enumerate(clss):
+        label = label_names[c] if 0 <= c < len(label_names) else f"cls{c}"
+        by_label.setdefault(label, []).append(i)
+
+    keep: list[int] = []
+    for label, idxs in by_label.items():
+        prev_id = sticky_ids.get(label)
+        chosen: int | None = None
+        if prev_id is not None and prev_id >= 0:
+            # Keep following the same track if it's still present this frame.
+            for i in idxs:
+                if ids[i] == prev_id:
+                    chosen = i
+                    break
+        if chosen is None:
+            chosen = max(idxs, key=lambda i: confs[i])
+        sticky_ids[label] = int(ids[chosen])
+        keep.append(chosen)
+
+    keep.sort()
+    return keep
+
+
 def track_video_with_yoloe_redetect(
     video_path: Path,
     initial_detection_result: DetectionResult,
@@ -135,6 +222,7 @@ def track_video_with_yoloe_redetect(
     model_name: str = "yoloe-11l-seg.pt",
     frame_step: int = 1,
     yoloe_conf: float = 0.1,
+    dedupe_by_label: bool = True,
     lost_after_n_frames: int = 3,
     occlusion_wait_frames: int = 10,
     redetect_every_n_frames: int | None = None,
@@ -146,6 +234,7 @@ def track_video_with_yoloe_redetect(
     sequence_id: str = "unknown",
     detection_writer: JsonlWriter | None = None,
     tracking_writer: JsonlWriter | None = None,
+    validation_writer: JsonlWriter | None = None,
 ):
     """Track objects with optional GDino re-detection.
 
@@ -171,6 +260,12 @@ def track_video_with_yoloe_redetect(
 
     When all redetect modes are off, ``provider``, ``task``, and
     ``detection_runner`` are unused and may be omitted.
+
+    ``dedupe_by_label`` (default True): collapse same-label detections to the
+    highest-score box before priming, so each label seeds exactly one YOLOE
+    class / BoTSORT track. Set False to track every detected instance
+    separately (e.g. several distinct apples that should each keep their own
+    id).
     """
     _redetect_enabled = (
         redetect_on_lost or redetect_on_invalid or (redetect_every_n_frames is not None)
@@ -229,6 +324,7 @@ def track_video_with_yoloe_redetect(
         frame_rgb=ref_rgb,
         detection_result=initial_detection_result,
         conf=yoloe_conf,
+        dedupe_by_label=dedupe_by_label,
     )
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -242,9 +338,14 @@ def track_video_with_yoloe_redetect(
     _prev_centers: dict[int, tuple[float, float]] = {}
     _first_seen: dict[int, int] = {}
 
+    # Sticky id kept per label for per-frame same-label dedup.
+    _dedup_sticky_ids: dict[str, int] = {}
+
     # Validator bookkeeping
     _validated_ids: set[int] = set()
     frames_since_prime = 0
+    # Frame of the most recent (re-)detection that (re-)seeded the tracks.
+    last_detection_frame = 0
 
     state = "TRACKING"
     frame_idx = 0
@@ -290,6 +391,11 @@ def track_video_with_yoloe_redetect(
                 )
                 reset_tracker_next = False
                 result = results[0]
+                # Collapse same-label duplicates to one stable track per label
+                # before any consumer (draw/validator/writers) sees the result.
+                if dedupe_by_label:
+                    keep = _sticky_dedupe_keep(result, label_names, _dedup_sticky_ids)
+                    result = result[keep]
                 last_result = result
                 frames_since_prime += 1
 
@@ -306,7 +412,10 @@ def track_video_with_yoloe_redetect(
 
                 # --- Composite validator: catch drifting / exploding / depth-jumping bboxes ---
                 invalid_reason: str | None = None
-                if validator is not None and redetect_on_invalid:
+                vres: ValidationResult | None = None
+                if validator is not None and (
+                    redetect_on_invalid or validation_writer is not None
+                ):
                     depth = (
                         _frame_depth_from_provider(provider, frame_idx)
                         if validate_with_depth
@@ -317,10 +426,24 @@ def track_video_with_yoloe_redetect(
                     for o in tracking_result.tracked_objects:
                         _validated_ids.add(o.track_id)
                     vres = validator.validate(val_frame, tracking_result)
-                    if not vres.is_valid:
+                    # Only the validator may force a redetect; writer-only mode
+                    # observes flags without triggering recovery.
+                    if redetect_on_invalid and not vres.is_valid:
                         invalid_reason = vres.reason or "validation failed"
 
                 drawn = _draw_tracks(frame_bgr, result, label_names)
+
+                if validation_writer and vres is not None:
+                    _write_validation_row(
+                        result=result,
+                        frame_idx=frame_idx,
+                        fps=fps,
+                        sequence_id=sequence_id,
+                        label_names=label_names,
+                        vres=vres,
+                        last_detection_frame=last_detection_frame,
+                        validation_writer=validation_writer,
+                    )
 
                 if tracking_writer:
                     _write_jsonl_rows(
@@ -405,6 +528,7 @@ def track_video_with_yoloe_redetect(
                         frame_rgb=frame_rgb,
                         detection_result=gdino_result,
                         conf=yoloe_conf,
+                        dedupe_by_label=dedupe_by_label,
                     )
                     for lbl in set(label_names) & expected_labels:
                         lost_count[lbl] = 0
@@ -413,6 +537,10 @@ def track_video_with_yoloe_redetect(
                     # Tracker IDs restart after a re-prime: clear validator state
                     # for everything we've validated so far so it reseeds cleanly.
                     frames_since_prime = 0
+                    last_detection_frame = frame_idx
+                    # Sticky dedup ids reference the old track numbering; drop
+                    # them so the next frame re-picks per label.
+                    _dedup_sticky_ids.clear()
                     if validator is not None:
                         for tid in _validated_ids:
                             validator.reset(tid)
@@ -627,3 +755,78 @@ def _write_jsonl_rows(
                 ),
             )
         )
+
+
+def _write_validation_row(
+    result,
+    frame_idx: int,
+    fps: float,
+    sequence_id: str,
+    label_names: list[str],
+    vres: ValidationResult,
+    last_detection_frame: int,
+    validation_writer: JsonlWriter,
+) -> None:
+    """Build and write a ValidationFrame with per-object flags.
+
+    Flags are assigned per tracked object from the validator's per-object
+    breakdown (``vres.objects``), matched to YOLOE boxes by track id:
+      - ``bbox_size_change_flag`` <- validator "area_change"
+      - ``drift_flag``            <- validator "drift"
+      - ``recovery_trigger``      <- any check fired for that object
+    """
+    timestamp = frame_idx / fps
+    boxes = result.boxes
+
+    # Per-object validation keyed by track id for O(1) lookup.
+    val_by_id = {ov.track_id: ov for ov in vres.objects}
+
+    tracked_objects: list[ValidatedObject] = []
+
+    if boxes is not None and len(boxes) > 0:
+        for i, box in enumerate(boxes):
+            if box.id is None:
+                # Validator is stateful per track id; skip untracked boxes.
+                continue
+            x1, y1, x2, y2 = box.xyxy[0].cpu().tolist()
+            cls_id = int(box.cls[0].cpu())
+            conf = float(box.conf[0].cpu())
+            track_id = int(box.id[0].cpu())
+            label = label_names[cls_id] if cls_id < len(label_names) else f"cls{cls_id}"
+            object_id = f"{label}_{track_id}"
+
+            ov = val_by_id.get(track_id)
+            bbox_size_change_flag = bool(ov and "area_change" in ov.flags)
+            drift_flag = bool(ov and "drift" in ov.flags)
+            recovery_trigger = bool(ov and not ov.is_valid)
+
+            status = (
+                TrackerStatus.DRIFTING
+                if (drift_flag or bbox_size_change_flag)
+                else TrackerStatus.OK
+            )
+
+            tracked_objects.append(
+                ValidatedObject(
+                    object_id=object_id,
+                    label=label,
+                    bbox_xyxy=[x1, y1, x2, y2],
+                    tracker_confidence=conf,
+                    tracker_status=status,
+                    flags=ObjectFlags(
+                        bbox_size_change_flag=bbox_size_change_flag,
+                        drift_flag=drift_flag,
+                        recovery_trigger=recovery_trigger,
+                    ),
+                    last_detection_frame=last_detection_frame,
+                )
+            )
+
+    validation_writer.write(
+        ValidationFrame(
+            sequence_id=sequence_id,
+            frame_id=frame_idx,
+            timestamp=timestamp,
+            tracked_objects=tracked_objects,
+        )
+    )

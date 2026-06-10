@@ -5,7 +5,11 @@ from dataclasses import dataclass
 import numpy as np
 
 from interfaces.ITracking import TrackingResult
-from interfaces.ITrackingValidator import TrackingValidator, ValidationResult
+from interfaces.ITrackingValidator import (
+    ObjectValidation,
+    TrackingValidator,
+    ValidationResult,
+)
 from interfaces.IFrameInput import RgbdFrame
 
 
@@ -60,6 +64,7 @@ class CompositeTrackingValidator(TrackingValidator):
 
         reasons: list[str] = []
         min_conf = 1.0
+        objects: list[ObjectValidation] = []
 
         last_area_ratio: float | None = None
         last_drift_px: float | None = None
@@ -82,10 +87,27 @@ class CompositeTrackingValidator(TrackingValidator):
                     prev_depth_mean=depth,
                     init_depth_norm_area=init_depth_norm,
                 )
+                # First sighting of this track: seed state, nothing to flag yet.
+                objects.append(
+                    ObjectValidation(
+                        track_id=obj.track_id,
+                        label=obj.label,
+                        is_valid=True,
+                        flags=[],
+                        area_ratio=1.0,
+                        drift_px=0.0,
+                        depth_delta=None,
+                        frames_since_init=0,
+                    )
+                )
                 continue
 
             state.frames_since_init += 1
             flags: list[str] = []
+
+            obj_area_ratio: float | None = None
+            obj_drift_px: float | None = None
+            obj_depth_delta: float | None = None
 
             # Area check — depth-normalised when metric depth is available.
             # Skipped for the first area_check_grace_frames after (re-)init so
@@ -96,32 +118,32 @@ class CompositeTrackingValidator(TrackingValidator):
                     rel_change = abs(cur_norm - state.init_depth_norm_area) / (
                         state.init_depth_norm_area + 1e-6
                     )
-                    last_area_ratio = cur_norm / (state.init_depth_norm_area + 1e-6)
+                    obj_area_ratio = cur_norm / (state.init_depth_norm_area + 1e-6)
                 else:
                     rel_change = abs(area - state.init_area) / (state.init_area + 1e-6)
-                    last_area_ratio = area / (state.init_area + 1e-6)
+                    obj_area_ratio = area / (state.init_area + 1e-6)
 
                 if rel_change > self._area_thresh:
                     flags.append("area_change")
             else:
                 # Inside grace period — report ratio for overlay but don't flag
                 if state.init_depth_norm_area is not None and depth and depth > 0:
-                    last_area_ratio = (area * depth**2) / (
+                    obj_area_ratio = (area * depth**2) / (
                         state.init_depth_norm_area + 1e-6
                     )
                 else:
-                    last_area_ratio = area / (state.init_area + 1e-6)
+                    obj_area_ratio = area / (state.init_area + 1e-6)
 
             drift = (
                 (cx - state.prev_center[0]) ** 2 + (cy - state.prev_center[1]) ** 2
             ) ** 0.5
-            last_drift_px = float(drift)
+            obj_drift_px = float(drift)
             if drift > self._drift_thresh:
                 flags.append("drift")
 
             if depth is not None and state.prev_depth_mean is not None:
                 delta = abs(depth - state.prev_depth_mean)
-                last_depth_delta = delta
+                obj_depth_delta = delta
                 if delta > self._depth_thresh:
                     flags.append("depth_jump")
 
@@ -129,10 +151,28 @@ class CompositeTrackingValidator(TrackingValidator):
                 flags.append("timeout")
                 state.frames_since_init = 0
 
-            last_age = state.frames_since_init
+            obj_age = state.frames_since_init
 
             state.prev_center = (cx, cy)
             state.prev_depth_mean = depth
+
+            objects.append(
+                ObjectValidation(
+                    track_id=obj.track_id,
+                    label=obj.label,
+                    is_valid=not flags,
+                    flags=flags,
+                    area_ratio=obj_area_ratio,
+                    drift_px=obj_drift_px,
+                    depth_delta=obj_depth_delta,
+                    frames_since_init=obj_age,
+                )
+            )
+
+            last_area_ratio = obj_area_ratio
+            last_drift_px = obj_drift_px
+            last_depth_delta = obj_depth_delta
+            last_age = obj_age
 
             if flags:
                 reasons.extend(f"{obj.label}:{f}" for f in flags)
@@ -142,6 +182,7 @@ class CompositeTrackingValidator(TrackingValidator):
             is_valid=len(reasons) == 0,
             confidence=min_conf,
             reason="; ".join(reasons) if reasons else None,
+            objects=objects,
             area_ratio=last_area_ratio,
             drift_px=last_drift_px,
             depth_delta=last_depth_delta,
