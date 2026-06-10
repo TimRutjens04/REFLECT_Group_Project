@@ -56,6 +56,33 @@ visualize-track:
 visualize-track-one episode:
     {{python}} code/visualize_track.py {{episode}}
 
+# Annotate EEF tip in frames to compute camera-robot extrinsics (T_cam_robot.npy)
+annotate-eef:
+    {{python}} pipeline/annotations/annotate_eef.py
+
+# Re-solve T_cam_robot from existing annotations without re-annotating
+annotate-eef-solve:
+    {{python}} pipeline/annotations/annotate_eef.py --solve-only
+
+# Render scene-graph keyframe strip PNG for an episode, e.g:
+#   just visualize-sg putAppleBowl1
+#   just visualize-sg putAppleBowl1 /path/to/custom.jsonl
+visualize-sg episode sg="":
+    {{python}} pipeline/scene_graph/visualize_scene_graph.py \
+        --sg "{{ if sg == "" { "scene_graphs/" + episode + "/scene_graph.jsonl" } else { sg } }}" \
+        --video example_data/real_data/{{episode}}/videos/color.mp4 \
+        --out visuals/scene_graphs/{{episode}}
+
+# Render scene-graph keyframe MP4 (left=bbox, right=graph) for an episode, e.g:
+#   just visualize-sg-mp4 putAppleBowl1
+#   just visualize-sg-mp4 putAppleBowl1 /path/to/custom.jsonl 8
+visualize-sg-mp4 episode sg="" fps="5":
+    {{python}} pipeline/scene_graph/visualize_scene_graph.py \
+        --sg "{{ if sg == "" { "scene_graphs/" + episode + "/scene_graph.jsonl" } else { sg } }}" \
+        --video example_data/real_data/{{episode}}/videos/color.mp4 \
+        --out visuals/scene_graphs/{{episode}} \
+        --mp4 --fps {{fps}} --keyframes-only
+
 # Benchmark CSRT vs ByteTrack vs ReID+Kalman on a single object (GDINO-driven), e.g:
 #   just benchmark occluded.mp4 "cooking pot"
 #   just benchmark occluded.mp4 "cooking pot" clean.mp4   (with GT companion video)

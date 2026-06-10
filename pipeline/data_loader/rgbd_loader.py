@@ -99,6 +99,22 @@ class VideoRgbdFrameProvider(RgbdFrameProvider):
                 return self._to_2d_float(ic_imread(str(p)))
         return None
 
+    def load_gripper_states(self) -> tuple[np.ndarray, np.ndarray] | None:
+        """Return (zarr_timestamps, gripper_closed_bool) or None if unavailable.
+
+        gripper_state: 0=open, 1=closing, 4=gripping, 5=opening — 4 counts as closed.
+        Caller aligns to video frame timestamps via np.searchsorted(zarr_timestamps, ts).
+        """
+        if not self.zarr_path.exists():
+            return None
+        try:
+            zr = zarr.open_group(str(self.zarr_path), mode="r")
+            timestamps = np.array(zr["data/timestamp"][:])
+            gripper_state = np.array(zr["data/gripper_state"][:])
+            return timestamps, (gripper_state == 4)
+        except (KeyError, Exception):
+            return None
+
     @staticmethod
     def _to_2d_float(depth: np.ndarray) -> np.ndarray:
         if depth.ndim == 3 and depth.shape[-1] in (3, 4):
