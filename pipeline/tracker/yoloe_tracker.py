@@ -588,6 +588,18 @@ def track_video_with_yoloe_redetect(
                         id_map=id_map,
                     )
 
+                if validation_writer and vres is not None:
+                    _write_validation_row(
+                        result=result,
+                        frame_idx=frame_idx,
+                        fps=fps,
+                        sequence_id=sequence_id,
+                        label_names=label_names,
+                        vres=vres,
+                        last_detection_frame=last_detection_frame,
+                        validation_writer=validation_writer,
+                    )
+
                 if tracking_writer:
                     _write_jsonl_rows(
                         result=result,
@@ -768,7 +780,9 @@ def _draw_tracks(
 
         label = label_names[cls_id] if cls_id < len(label_names) else f"cls{cls_id}"
 
-        text = f"{label}#{track_id} {conf:.2f}" if track_id >= 0 else f"{label} {conf:.2f}"
+        text = (
+            f"{label}#{track_id} {conf:.2f}" if track_id >= 0 else f"{label} {conf:.2f}"
+        )
 
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(
