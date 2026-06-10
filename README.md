@@ -44,7 +44,7 @@ here should be full architecture image
 
 **Detection overlay - frame 0 (`putAppleBowl1`)**
 
-![Detection step 0](pipeline/outputs/example/images/detection_step_0.png)
+Generated at runtime: `outputs/<run_id>/images/detection_step_0.png`
 
 Both the red apple (conf 0.93) and dark blue bowl (conf 0.85) are detected by Grounding DINO on the first frame. YOLOE is then seeded with these bounding boxes as visual prompts and tracks through the rest of the episode.
 
