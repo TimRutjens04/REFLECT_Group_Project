@@ -588,18 +588,6 @@ def track_video_with_yoloe_redetect(
                         id_map=id_map,
                     )
 
-                if validation_writer and vres is not None:
-                    _write_validation_row(
-                        result=result,
-                        frame_idx=frame_idx,
-                        fps=fps,
-                        sequence_id=sequence_id,
-                        label_names=label_names,
-                        vres=vres,
-                        last_detection_frame=last_detection_frame,
-                        validation_writer=validation_writer,
-                    )
-
                 if tracking_writer:
                     _write_jsonl_rows(
                         result=result,
