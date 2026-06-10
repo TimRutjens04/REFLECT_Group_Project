@@ -8,12 +8,13 @@ from detector.runner import DetectionRunner
 from detector.prompt_strategy import PromptStrategy
 from models.base import JsonlWriter
 from models.detection import TriggerReason
-from sam2_tracker_redetect import track_video_with_sam2
+from tracker.sam2_tracker_redetect import track_video_with_sam2
 from scripts.notebook_helpers import detection_result_to_pil
-from validator import CompositeTrackingValidator
-from yoloe_tracker import track_video_with_yoloe_redetect
-from yoloe_tracker2 import track_video_with_yoloe
+from tracker.validator import CompositeTrackingValidator
+from tracker.yoloe_tracker import track_video_with_yoloe_redetect
+from tracker.yoloe_tracker2 import track_video_with_yoloe
 from detector.locateanything import LocateAnythingDetector
+from depth.pipeline_depth import run_depth_scene_graph
 
 
 def main():
@@ -32,6 +33,7 @@ def main():
     jsonl_dir = Path("real_world/jsonl")
     detection_writer = JsonlWriter(jsonl_dir / "detections.jsonl")
     tracking_writer = JsonlWriter(jsonl_dir / "tracking.jsonl")
+    validation_writer = JsonlWriter(jsonl_dir / "validation.jsonl")
 
     detector = GroundingDinoDetector(DetectorConfig())
     detector.load()
@@ -65,6 +67,7 @@ def main():
         sequence_id=task.folder_name,
         detection_writer=detection_writer,
         tracking_writer=tracking_writer,
+        validation_writer=validation_writer,
         redetect_every_n_frames=30,
         provider=provider,
         detection_runner=runner,
@@ -73,6 +76,16 @@ def main():
         redetect_on_invalid=True,
         validator=CompositeTrackingValidator(),
         validate_with_depth=True,
+        dedupe_by_label=True,
+    )
+
+    # --- Depth + scene graph ---
+    # Consumes the tracker/validator handoff JSONL and reads RGB/depth frames
+    # through the same data loader provider used above.
+    validation_jsonl = jsonl_dir / "validation.jsonl"
+    run_depth_scene_graph(
+        tracking_jsonl=validation_jsonl,
+        provider=provider,
     )
     # track_video_with_yoloe(
     #     video_path=color_video,

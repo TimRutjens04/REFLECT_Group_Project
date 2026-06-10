@@ -43,3 +43,33 @@ class TrackingFrame(FrameBase):
 
     tracked_objects: list[TrackedObject]
     flags: TrackingFlags
+
+
+# --------------------------------------------------------------------------- #
+# Validation JSONL — separate stream, one row per frame, with flags assigned
+# per tracked object (not per frame). Written by a dedicated validation writer
+# so the tracking.jsonl schema above stays untouched.
+# --------------------------------------------------------------------------- #
+@dataclass
+class ObjectFlags:
+    bbox_size_change_flag: bool
+    drift_flag: bool
+    recovery_trigger: bool
+
+
+@dataclass
+class ValidatedObject:
+    object_id: str
+    label: str
+    bbox_xyxy: list[float]
+    tracker_confidence: float
+    tracker_status: TrackerStatus
+    flags: ObjectFlags
+    last_detection_frame: int
+
+
+@dataclass
+class ValidationFrame(FrameBase):
+    """One validation JSONL row per frame with per-object flags."""
+
+    tracked_objects: list[ValidatedObject]
