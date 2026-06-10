@@ -395,7 +395,6 @@ def track_video_with_yoloe_redetect(
     class / BoTSORT track. Set False to track every detected instance
     separately (e.g. several distinct apples that should each keep their own
     id).
-
     Stable ids: each label's id is allocated once, at the verified initial
     detection, and never changes (see :class:`_StableIdAssigner`). Re-ID is
     used as a veto at re-detection time: a GDino box whose crop doesn't match
@@ -481,7 +480,8 @@ def track_video_with_yoloe_redetect(
 
     # Sticky id kept per label for per-frame same-label dedup.
     _dedup_sticky_ids: dict[str, int] = {}
-
+    # Validator bookkeeping
+    _validated_ids: set[int] = set()
     frames_since_prime = 0
     # Frame of the most recent (re-)detection that (re-)seeded the tracks.
     last_detection_frame = 0
@@ -568,6 +568,7 @@ def track_video_with_yoloe_redetect(
                         result, label_names, id_map
                     )
                     vres = validator.validate(val_frame, tracking_result)
+                    _validated_ids.update(ov.track_id for ov in vres.objects)
                     # Only the validator may force a redetect; writer-only mode
                     # observes flags without triggering recovery.
                     if redetect_on_invalid and not vres.is_valid:
@@ -698,6 +699,10 @@ def track_video_with_yoloe_redetect(
                     # Sticky dedup ids reference the old track numbering; drop
                     # them so the next frame re-picks per label.
                     _dedup_sticky_ids.clear()
+                    if validator is not None:
+                        for tid in _validated_ids:
+                            validator.reset(tid)
+                        _validated_ids.clear()
 
                     drawn = _draw_gdino_boxes(frame_bgr, gdino_result)
                 else:
@@ -768,7 +773,9 @@ def _draw_tracks(
 
         label = label_names[cls_id] if cls_id < len(label_names) else f"cls{cls_id}"
 
-        text = f"{label}#{track_id} {conf:.2f}" if track_id >= 0 else f"{label} {conf:.2f}"
+        text = (
+            f"{label}#{track_id} {conf:.2f}" if track_id >= 0 else f"{label} {conf:.2f}"
+        )
 
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(
