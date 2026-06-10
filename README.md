@@ -85,7 +85,7 @@ uv sync
 uv run python main.py
 ```
 
-Results land in `pipeline/outputs/<run_id>/`, where `<run_id>` is a timestamped folder per run, e.g. `outputs/20260610_141523_putAppleBowl1/` (see Output layout below).
+Results land in `outputs/<run_id>/` (relative to the `pipeline/` directory), where `<run_id>` is a timestamped folder per run, e.g. `outputs/20260610_141523_putAppleBowl1/` (see Output layout below).
 
 ---
 
