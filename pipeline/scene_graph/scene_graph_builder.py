@@ -14,11 +14,15 @@ and detection signals are joined at frame level.
 
 from __future__ import annotations
 
+import sys
 from collections import deque
 from dataclasses import dataclass
 from itertools import combinations
+from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.detection import DetectionFrame, DetectionFailureMode
 from models.tracking import TrackingFrame, TrackedObject

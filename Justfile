@@ -58,17 +58,17 @@ visualize-track-one episode:
 
 # Annotate EEF tip in frames to compute camera-robot extrinsics (T_cam_robot.npy)
 annotate-eef:
-    {{python}} pipeline/annotate_eef.py
+    {{python}} pipeline/annotations/annotate_eef.py
 
 # Re-solve T_cam_robot from existing annotations without re-annotating
 annotate-eef-solve:
-    {{python}} pipeline/annotate_eef.py --solve-only
+    {{python}} pipeline/annotations/annotate_eef.py --solve-only
 
 # Render scene-graph keyframe strip PNG for an episode, e.g:
 #   just visualize-sg putAppleBowl1
 #   just visualize-sg putAppleBowl1 /path/to/custom.jsonl
 visualize-sg episode sg="":
-    {{python}} pipeline/visualize_scene_graph.py \
+    {{python}} pipeline/scene_graph/visualize_scene_graph.py \
         --sg "{{ if sg == "" { "scene_graphs/" + episode + "/scene_graph.jsonl" } else { sg } }}" \
         --video example_data/real_data/{{episode}}/videos/color.mp4 \
         --out visuals/scene_graphs/{{episode}}
@@ -77,7 +77,7 @@ visualize-sg episode sg="":
 #   just visualize-sg-mp4 putAppleBowl1
 #   just visualize-sg-mp4 putAppleBowl1 /path/to/custom.jsonl 8
 visualize-sg-mp4 episode sg="" fps="5":
-    {{python}} pipeline/visualize_scene_graph.py \
+    {{python}} pipeline/scene_graph/visualize_scene_graph.py \
         --sg "{{ if sg == "" { "scene_graphs/" + episode + "/scene_graph.jsonl" } else { sg } }}" \
         --video example_data/real_data/{{episode}}/videos/color.mp4 \
         --out visuals/scene_graphs/{{episode}} \

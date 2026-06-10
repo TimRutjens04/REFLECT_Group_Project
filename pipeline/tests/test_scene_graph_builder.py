@@ -27,8 +27,8 @@ from models.detection import (
 )
 from models.scene_graph import LocalizationFailureType, NodeStatus
 from models.tracking import TrackedObject, TrackerStatus, TrackingFlags, TrackingFrame
-from scene_graph_builder import SceneGraphBuilder, SceneGraphConfig
-from build_scene_graphs import assemble
+from scene_graph.scene_graph_builder import SceneGraphBuilder, SceneGraphConfig
+from scene_graph.build_scene_graphs import assemble
 
 
 def _obj(object_id, bbox, conf=0.9, ratio=1.0, disp=0.0):

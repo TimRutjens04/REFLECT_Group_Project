@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.base import JsonlWriter
 from models.detection import (
@@ -32,7 +35,7 @@ from models.detection import (
     TriggerReason,
 )
 from models.tracking import TrackedObject, TrackerStatus, TrackingFlags, TrackingFrame
-from scene_graph_builder import SceneGraphBuilder, SceneGraphConfig
+from scene_graph.scene_graph_builder import SceneGraphBuilder, SceneGraphConfig
 
 DepthFn = Callable[[int], np.ndarray]
 GripperFn = Callable[[int, float], bool]         # (frame_id, timestamp) -> gripper_closed

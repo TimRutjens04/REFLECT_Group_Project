@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 import zarr
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from data_loader.rgbd_loader import VideoRgbdFrameProvider
 from data_loader.task_loader import TaskLoader
 
