@@ -205,7 +205,7 @@ def main() -> None:
     parser.add_argument("--out", default="real_world/jsonl/scene_graph.jsonl")
     parser.add_argument(
         "--T-cam-robot",
-        default=str(Path(__file__).parent / "T_cam_robot.npy"),
+        default=str(Path(__file__).parent.parent / "annotations" / "T_cam_robot.npy"),
         help="Path to 4×4 SE3 transform numpy file (robot base → camera).",
     )
     args = parser.parse_args()
