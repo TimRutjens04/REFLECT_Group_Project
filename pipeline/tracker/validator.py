@@ -30,7 +30,10 @@ class CompositeTrackingValidator(TrackingValidator):
       - depth_jump  : mean depth inside bbox jumps > depth_jump_thresh metres
       - timeout     : redetect_interval frames elapsed since last reinit
 
-    Call reset(track_id) after the tracker reinitialises to clear stale state.
+    State is keyed by track_id. The YOLOE tracker feeds re-ID-stable ids
+    (see tracker.reid), so an object re-acquired after a re-prime keeps its
+    id and its validation state here persists across the re-detection.
+    Call reset(track_id) only when an id is retired or its object replaced.
     """
 
     def __init__(

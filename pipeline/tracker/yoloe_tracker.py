@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -22,6 +22,61 @@ from models.tracking import (
     ValidatedObject,
     ValidationFrame,
 )
+from tracker.reid import ObjectReIdMatcher, crop_embedding
+
+
+class _StableIdAssigner:
+    """One permanent id per label, anchored to the verified initial detection.
+
+    The identity set is closed at seeding: the first detection frame is the
+    only verified observation of each object, so each label gets exactly one
+    id and one reference embedding, frozen at seed time. No id is ever minted
+    afterwards — re-ID is a *veto*, not an allocator: ``verify()`` checks a
+    re-detected box against the frozen seed reference, and a box that doesn't
+    look like the seeded object is rejected by the caller (the object stays
+    lost, keeping its id) instead of being adopted under a new identity.
+
+    Assumes one object per label (``dedupe_by_label``); raw BoTSORT ids are
+    mapped to the label's permanent id regardless of re-primes.
+    """
+
+    def __init__(self, matcher: ObjectReIdMatcher | None = None) -> None:
+        self._matcher = matcher or ObjectReIdMatcher()
+        self._id_by_label: dict[str, int] = {}
+        self._next_id = 1
+
+    def seed(self, label: str, frame_rgb: np.ndarray, bbox_xyxy) -> int:
+        """Allocate the label's permanent id and freeze its reference.
+
+        Only the first call per label registers anything; later calls return
+        the existing id without touching the reference.
+        """
+        sid = self._id_by_label.get(label)
+        if sid is None:
+            sid = self._next_id
+            self._next_id += 1
+            self._id_by_label[label] = sid
+            emb = crop_embedding(frame_rgb, bbox_xyxy)
+            if emb is not None:
+                self._matcher.register(sid, emb)
+        return sid
+
+    def verify(self, label: str, frame_rgb: np.ndarray, bbox_xyxy) -> bool:
+        """True if the box looks like the label's seeded object.
+
+        Unseeded labels and degenerate crops pass: there is no reference to
+        disprove identity against.
+        """
+        sid = self._id_by_label.get(label)
+        if sid is None:
+            return True
+        emb = crop_embedding(frame_rgb, bbox_xyxy)
+        if emb is None:
+            return True
+        return self._matcher.is_same_object(sid, emb)
+
+    def stable_id(self, label: str) -> int | None:
+        return self._id_by_label.get(label)
 
 
 # --------------------------------------------------------------------------- #
@@ -45,11 +100,17 @@ class _ValFrame:
     depth: np.ndarray | None = None
 
 
-def _yoloe_result_to_tracking(result, label_names: list[str]) -> _ValTrackingResult:
+def _yoloe_result_to_tracking(
+    result,
+    label_names: list[str],
+    id_map: dict[int, int] | None = None,
+) -> _ValTrackingResult:
     """Convert a YOLOE/BoTSORT result into a validator-readable TrackingResult.
 
     Boxes without an assigned track id are skipped: the validator is stateful
     per track_id, so only stably-tracked objects can be meaningfully validated.
+    ``id_map`` translates raw BoTSORT ids to re-ID-stable ids so the validator
+    keys its state on ids that survive re-primes.
     """
     objs: list[_ValTrackedObject] = []
     boxes = result.boxes
@@ -62,6 +123,8 @@ def _yoloe_result_to_tracking(result, label_names: list[str]) -> _ValTrackingRes
         x1, y1, x2, y2 = box.xyxy[0].cpu().tolist()
         cls_id = int(box.cls[0].cpu())
         track_id = int(box.id[0].cpu())
+        if id_map is not None:
+            track_id = id_map.get(track_id, track_id)
         label = label_names[cls_id] if cls_id < len(label_names) else f"cls{cls_id}"
         objs.append(
             _ValTrackedObject(
@@ -72,6 +135,72 @@ def _yoloe_result_to_tracking(result, label_names: list[str]) -> _ValTrackingRes
         )
 
     return _ValTrackingResult(tracked_objects=objs)
+
+
+def _seed_stable_ids(
+    stable: _StableIdAssigner,
+    detection_result: DetectionResult,
+    frame_rgb: np.ndarray,
+    dedupe_by_label: bool,
+) -> None:
+    """Seed each label's permanent id from the verified initial detections."""
+    dets = detection_result.detections
+    if dedupe_by_label:
+        dets = _dedupe_detections_by_label(dets)
+    for det in dets:
+        stable.seed(det.label, frame_rgb, det.bbox_2d)
+
+
+def _verify_redetections(
+    stable: _StableIdAssigner,
+    detection_result: DetectionResult,
+    frame_rgb: np.ndarray,
+    dedupe_by_label: bool,
+) -> tuple[DetectionResult, list[str]]:
+    """Veto re-detections that don't look like the seeded objects.
+
+    Returns the detection result reduced to verified boxes (labels seeded at
+    init are also (re-)seeded here only if they were never seen before), plus
+    the rejected labels. A rejected object stays lost under its permanent id
+    rather than being re-primed from the wrong box.
+    """
+    dets = detection_result.detections
+    if dedupe_by_label:
+        dets = _dedupe_detections_by_label(dets)
+    verified: list[DetectedObject] = []
+    rejected: list[str] = []
+    for det in dets:
+        if stable.stable_id(det.label) is None:
+            # Label never seeded (not present at init): adopt it now.
+            stable.seed(det.label, frame_rgb, det.bbox_2d)
+            verified.append(det)
+        elif stable.verify(det.label, frame_rgb, det.bbox_2d):
+            verified.append(det)
+        else:
+            rejected.append(det.label)
+    return replace(detection_result, detections=verified), rejected
+
+
+def _build_stable_id_map(
+    result,
+    label_names: list[str],
+    stable: _StableIdAssigner,
+) -> dict[int, int]:
+    """Map each tracked box's raw BoTSORT id to its label's permanent id."""
+    id_map: dict[int, int] = {}
+    boxes = result.boxes
+    if boxes is None or len(boxes) == 0:
+        return id_map
+    for box in boxes:
+        if box.id is None:
+            continue
+        raw_id = int(box.id[0].cpu())
+        cls_id = int(box.cls[0].cpu())
+        label = label_names[cls_id] if cls_id < len(label_names) else f"cls{cls_id}"
+        sid = stable.stable_id(label)
+        if sid is not None:
+            id_map[raw_id] = sid
+    return id_map
 
 
 def _frame_depth_from_provider(provider, frame_idx: int) -> np.ndarray | None:
@@ -266,6 +395,13 @@ def track_video_with_yoloe_redetect(
     class / BoTSORT track. Set False to track every detected instance
     separately (e.g. several distinct apples that should each keep their own
     id).
+
+    Stable ids: each label's id is allocated once, at the verified initial
+    detection, and never changes (see :class:`_StableIdAssigner`). Re-ID is
+    used as a veto at re-detection time: a GDino box whose crop doesn't match
+    the frozen seed embedding is rejected, leaving that object lost under its
+    permanent id, instead of re-priming the tracker from the wrong box. All
+    consumers (validator, JSONL writers, overlay) see the permanent ids.
     """
     _redetect_enabled = (
         redetect_on_lost or redetect_on_invalid or (redetect_every_n_frames is not None)
@@ -327,6 +463,11 @@ def track_video_with_yoloe_redetect(
         dedupe_by_label=dedupe_by_label,
     )
 
+    # Re-ID layer: raw BoTSORT ids restart on every re-prime, so all consumers
+    # (validator, writers, overlay) are fed appearance-stable ids instead.
+    _stable = _StableIdAssigner()
+    _seed_stable_ids(_stable, initial_detection_result, ref_rgb, dedupe_by_label)
+
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     expected_labels = set(label_names)
@@ -341,8 +482,6 @@ def track_video_with_yoloe_redetect(
     # Sticky id kept per label for per-frame same-label dedup.
     _dedup_sticky_ids: dict[str, int] = {}
 
-    # Validator bookkeeping
-    _validated_ids: set[int] = set()
     frames_since_prime = 0
     # Frame of the most recent (re-)detection that (re-)seeded the tracks.
     last_detection_frame = 0
@@ -399,6 +538,9 @@ def track_video_with_yoloe_redetect(
                 last_result = result
                 frames_since_prime += 1
 
+                # Raw BoTSORT id -> permanent per-label id for everything downstream.
+                id_map = _build_stable_id_map(result, label_names, _stable)
+
                 missing: set[str] = set()
                 if redetect_on_lost:
                     present = _present_labels(result, label_names, yoloe_conf)
@@ -422,16 +564,29 @@ def track_video_with_yoloe_redetect(
                         else None
                     )
                     val_frame = _ValFrame(depth=depth)
-                    tracking_result = _yoloe_result_to_tracking(result, label_names)
-                    for o in tracking_result.tracked_objects:
-                        _validated_ids.add(o.track_id)
+                    tracking_result = _yoloe_result_to_tracking(
+                        result, label_names, id_map
+                    )
                     vres = validator.validate(val_frame, tracking_result)
                     # Only the validator may force a redetect; writer-only mode
                     # observes flags without triggering recovery.
                     if redetect_on_invalid and not vres.is_valid:
                         invalid_reason = vres.reason or "validation failed"
 
-                drawn = _draw_tracks(frame_bgr, result, label_names)
+                drawn = _draw_tracks(frame_bgr, result, label_names, id_map)
+
+                if validation_writer and vres is not None:
+                    _write_validation_row(
+                        result=result,
+                        frame_idx=frame_idx,
+                        fps=fps,
+                        sequence_id=sequence_id,
+                        label_names=label_names,
+                        vres=vres,
+                        last_detection_frame=last_detection_frame,
+                        validation_writer=validation_writer,
+                        id_map=id_map,
+                    )
 
                 if validation_writer and vres is not None:
                     _write_validation_row(
@@ -456,6 +611,7 @@ def track_video_with_yoloe_redetect(
                         prev_centers=_prev_centers,
                         first_seen=_first_seen,
                         tracking_writer=tracking_writer,
+                        id_map=id_map,
                     )
 
                 # Missing-label trigger
@@ -511,6 +667,21 @@ def track_video_with_yoloe_redetect(
                     if redetect_on_lost
                     else set()
                 )
+                # Re-ID veto: only boxes that look like the objects verified at
+                # initial seeding may re-prime the tracker. A GDino box on the
+                # wrong object is dropped here; that object stays lost under
+                # its permanent id instead of being re-seeded from a bad box.
+                rejected_labels: list[str] = []
+                if gdino_result.success and gdino_result.detections:
+                    gdino_result, rejected_labels = _verify_redetections(
+                        _stable, gdino_result, frame_rgb, dedupe_by_label
+                    )
+                    if rejected_labels:
+                        print(
+                            f"[frame {frame_idx}] re-ID rejected "
+                            f"{sorted(rejected_labels)} (does not match seed embedding)."
+                        )
+
                 found = (
                     {d.label for d in gdino_result.detections}
                     if gdino_result.detections
@@ -534,21 +705,23 @@ def track_video_with_yoloe_redetect(
                         lost_count[lbl] = 0
                     reset_tracker_next = True
 
-                    # Tracker IDs restart after a re-prime: clear validator state
-                    # for everything we've validated so far so it reseeds cleanly.
                     frames_since_prime = 0
                     last_detection_frame = frame_idx
                     # Sticky dedup ids reference the old track numbering; drop
                     # them so the next frame re-picks per label.
                     _dedup_sticky_ids.clear()
-                    if validator is not None:
-                        for tid in _validated_ids:
-                            validator.reset(tid)
-                        _validated_ids.clear()
 
                     drawn = _draw_gdino_boxes(frame_bgr, gdino_result)
                 else:
-                    if missing_now:
+                    if rejected_labels:
+                        print(
+                            f"[frame {frame_idx}] no verified detections left after "
+                            f"re-ID veto. Backing off {occlusion_wait_frames} frames."
+                        )
+                        drawn = _draw_status(
+                            frame_bgr, f"re-ID rejected {sorted(rejected_labels)}"
+                        )
+                    elif missing_now:
                         print(
                             f"[frame {frame_idx}] GDINO did not recover "
                             f"{sorted(missing_now)}. Backing off {occlusion_wait_frames} frames."
@@ -590,6 +763,7 @@ def _draw_tracks(
     frame_bgr: np.ndarray,
     result,
     label_names: list[str],
+    id_map: dict[int, int] | None = None,
 ) -> np.ndarray:
     out = frame_bgr.copy()
 
@@ -601,10 +775,14 @@ def _draw_tracks(
         cls_id = int(box.cls[0].cpu())
         conf = float(box.conf[0].cpu())
         track_id = int(box.id[0].cpu()) if box.id is not None else -1
+        if id_map is not None:
+            track_id = id_map.get(track_id, track_id)
 
         label = label_names[cls_id] if cls_id < len(label_names) else f"cls{cls_id}"
 
-        text = f"{label} {conf:.2f}"
+        text = (
+            f"{label}#{track_id} {conf:.2f}" if track_id >= 0 else f"{label} {conf:.2f}"
+        )
 
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(
@@ -685,8 +863,13 @@ def _write_jsonl_rows(
     prev_centers: dict,
     first_seen: dict,
     tracking_writer: JsonlWriter | None,
+    id_map: dict[int, int] | None = None,
 ) -> None:
-    """Build and write a TrackingFrame for one YOLOe tracking frame."""
+    """Build and write a TrackingFrame for one YOLOe tracking frame.
+
+    ``id_map`` translates raw BoTSORT ids to re-ID-stable ids so object_id and
+    the per-track derived fields (init area, displacement) survive re-primes.
+    """
     timestamp = frame_idx / fps
     boxes = result.boxes
 
@@ -698,6 +881,8 @@ def _write_jsonl_rows(
             cls_id = int(box.cls[0].cpu())
             conf = float(box.conf[0].cpu())
             track_id = int(box.id[0].cpu()) if box.id is not None else -(i + 1)
+            if id_map is not None and track_id >= 0:
+                track_id = id_map.get(track_id, track_id)
             label = label_names[cls_id] if cls_id < len(label_names) else f"cls{cls_id}"
             object_id = f"{label}_{track_id}" if track_id >= 0 else f"{label}_{i}"
 
@@ -766,6 +951,7 @@ def _write_validation_row(
     vres: ValidationResult,
     last_detection_frame: int,
     validation_writer: JsonlWriter,
+    id_map: dict[int, int] | None = None,
 ) -> None:
     """Build and write a ValidationFrame with per-object flags.
 
@@ -792,6 +978,9 @@ def _write_validation_row(
             cls_id = int(box.cls[0].cpu())
             conf = float(box.conf[0].cpu())
             track_id = int(box.id[0].cpu())
+            if id_map is not None:
+                # vres.objects carry stable ids; translate before matching.
+                track_id = id_map.get(track_id, track_id)
             label = label_names[cls_id] if cls_id < len(label_names) else f"cls{cls_id}"
             object_id = f"{label}_{track_id}"
 
