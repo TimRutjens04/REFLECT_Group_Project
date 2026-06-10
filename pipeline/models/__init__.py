@@ -2,7 +2,15 @@ from .base import FrameBase, BBoxXYXY, JsonlWriter
 from .detection import DetectionFrame, Detection, TriggerReason, DetectionFailureMode
 from .tracking import TrackingFrame, TrackedObject, TrackerStatus, TrackingFlags
 from .depth import DepthFrame, ObjectDepth
-from .scene_graph import SceneGraphFrame, SceneGraphNode, SceneGraphEdge, Position3D
+from .scene_graph import (
+    SceneGraphFrame,
+    SceneGraphNode,
+    SceneGraphEdge,
+    Position3D,
+    NodeStatus,
+    LocalizationFlag,
+    LocalizationFailureType,
+)
 
 __all__ = [
     "FrameBase",
@@ -22,4 +30,7 @@ __all__ = [
     "SceneGraphNode",
     "SceneGraphEdge",
     "Position3D",
+    "NodeStatus",
+    "LocalizationFlag",
+    "LocalizationFailureType",
 ]

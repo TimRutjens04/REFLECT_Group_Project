@@ -59,6 +59,7 @@ Thumbs.db
 
 # Project-specific
 .claude/
+data/
 aligned/
 encoded/
 owl/
@@ -86,3 +87,5 @@ scene_graphs_pipeline/
 segment/
 track/
 depth/
+data/
+example_data/
