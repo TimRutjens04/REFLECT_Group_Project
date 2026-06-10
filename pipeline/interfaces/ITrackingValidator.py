@@ -9,6 +9,7 @@ from interfaces.ITracking import TrackingResult
 
 @dataclass
 class ValidationResult:
+    track_id: int | None = None
     is_valid: bool
     confidence: float
     reason: str | None = None

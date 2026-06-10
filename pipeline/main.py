@@ -8,11 +8,11 @@ from detector.runner import DetectionRunner
 from detector.prompt_strategy import PromptStrategy
 from models.base import JsonlWriter
 from models.detection import TriggerReason
-from sam2_tracker_redetect import track_video_with_sam2
+from pipeline.tracker.sam2_tracker_redetect import track_video_with_sam2
 from scripts.notebook_helpers import detection_result_to_pil
-from validator import CompositeTrackingValidator
-from yoloe_tracker import track_video_with_yoloe_redetect
-from yoloe_tracker2 import track_video_with_yoloe
+from pipeline.tracker.validator import CompositeTrackingValidator
+from pipeline.tracker.yoloe_tracker import track_video_with_yoloe_redetect
+from pipeline.tracker.yoloe_tracker2 import track_video_with_yoloe
 from detector.locateanything import LocateAnythingDetector
 
 
