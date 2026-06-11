@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sys
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import combinations
 from pathlib import Path
 
@@ -64,6 +64,17 @@ class SceneGraphConfig:
     drift_px: float = 50.0
     # Gripper: frames of depth history for held-object attribution (mirrors code/track.py)
     grip_approach_window: int = 10
+    # Occlusion buffer: frames to keep a ghost node before evicting as truly missing.
+    occlusion_buffer_frames: int = 10
+
+
+def _make_ghost(node: SceneGraphNode, frames_absent: int) -> SceneGraphNode:
+    """Return a copy of node with OCCLUDED status and linearly decayed confidence."""
+    return replace(
+        node,
+        status=NodeStatus.OCCLUDED,
+        confidence=max(0.0, node.confidence - 0.05 * frames_absent),
+    )
 
 
 def _bbox_area(b: list[float]) -> float:
@@ -107,6 +118,9 @@ class SceneGraphBuilder:
         self._depth_history: dict[str, deque] = {}
         # Centroid history for displacement fallback (no T_cam_robot)
         self._centroid_history: dict[str, deque] = {}
+        # Occlusion buffer: object_id → (last_known_node, frames_absent).
+        # frames_absent=0 means visible last frame; >0 means currently ghosted.
+        self._occlusion_buffer: dict[str, tuple[SceneGraphNode, int]] = {}
 
     # ----- depth -------------------------------------------------------------
     def _resolve_depth_scale(self, depth: np.ndarray) -> float:
@@ -217,6 +231,43 @@ class SceneGraphBuilder:
         if object_id not in self._centroid_history:
             self._centroid_history[object_id] = deque(maxlen=self.cfg.grip_approach_window)
         self._centroid_history[object_id].append((cx, cy))
+
+    def _apply_occlusion_buffer(
+        self, nodes: list[SceneGraphNode], current_ids: set[str], gripper_closed: bool
+    ) -> list[SceneGraphNode]:
+        """Splice in ghost nodes for recently-absent objects; evict truly-missing ones.
+
+        Held objects (gripper closed + _held_object_id set) are never evicted — the
+        gripper state is the authoritative source of truth for holds, so the tracker
+        dropping the object just means arm occlusion, not a slip.
+        """
+        to_evict: list[str] = []
+        for oid, (last_node, frames_absent) in list(self._occlusion_buffer.items()):
+            if frames_absent == 0 or oid in current_ids:
+                continue
+            keep_indefinitely = gripper_closed and oid == self._held_object_id
+            if frames_absent < self.cfg.occlusion_buffer_frames or keep_indefinitely:
+                nodes.append(_make_ghost(last_node, frames_absent))
+                self._occlusion_buffer[oid] = (last_node, frames_absent + 1)
+            else:
+                to_evict.append(oid)
+        for oid in to_evict:
+            del self._occlusion_buffer[oid]
+
+        # Objects disappearing for the first time this frame (frames_absent was 0).
+        for oid, (last_node, frames_absent) in list(self._occlusion_buffer.items()):
+            if frames_absent == 0 and oid not in current_ids and oid in self._prev_ids:
+                keep_indefinitely = gripper_closed and oid == self._held_object_id
+                if 1 <= self.cfg.occlusion_buffer_frames or keep_indefinitely:
+                    nodes.append(_make_ghost(last_node, 1))
+                self._occlusion_buffer[oid] = (last_node, 1)
+
+        # Refresh buffer with current visible nodes.
+        for node in nodes:
+            if node.object_id != "gripper" and node.status != NodeStatus.OCCLUDED:
+                self._occlusion_buffer[node.object_id] = (node, 0)
+
+        return nodes
 
     def _attribute_held_object(
         self, nodes: list[SceneGraphNode], eef_pos: np.ndarray | None = None
@@ -341,6 +392,7 @@ class SceneGraphBuilder:
         detection: DetectionFrame | None,
         gripper_closed: bool,
         just_closed: bool,
+        just_opened: bool,
     ) -> LocalizationFlag:
         # Wrong_object: detector reports the wrong / no category this frame.
         if detection is not None and detection.failure_mode in (
@@ -350,10 +402,12 @@ class SceneGraphBuilder:
             affected = detection.detections[0].object_id if detection.detections else None
             return LocalizationFlag(True, LocalizationFailureType.WRONG_OBJECT, affected)
 
-        # Slip: held object vanished while gripper is still closed.
-        if self._held_object_id and gripper_closed:
-            current_ids = {n.object_id for n in nodes}
-            if self._held_object_id not in current_ids:
+        # Slip: gripper just opened and the held object is not visible to the tracker.
+        # While the gripper is closed, tracker invisibility means arm occlusion (not slip)
+        # — the gripper state is the authoritative source of truth for holds.
+        if just_opened and self._held_object_id:
+            live_ids = {n.object_id for n in nodes if n.status != NodeStatus.OCCLUDED}
+            if self._held_object_id not in live_ids:
                 return LocalizationFlag(True, LocalizationFailureType.SLIP, self._held_object_id)
 
         # No_Grasp: gripper just closed but depth approach gave no candidate.
@@ -380,21 +434,30 @@ class SceneGraphBuilder:
         depth_m = np.asarray(depth, dtype=np.float64) * self._resolve_depth_scale(np.asarray(depth))
         nodes = [self._make_node(obj, depth_m) for obj in tracking_frame.tracked_objects]
 
-        # Update histories before attribution so this frame is included.
+        # Splice in ghost nodes for occluded objects before any downstream logic.
+        # Held objects are never evicted while gripper is closed (arm occlusion ≠ slip).
+        current_ids = {n.object_id for n in nodes}
+        nodes = self._apply_occlusion_buffer(nodes, current_ids, gripper_closed)
+
+        # Update histories before attribution so this frame is included (skip ghosts).
         for node in nodes:
+            if node.status == NodeStatus.OCCLUDED:
+                continue
             if node.depth_validity_flag:
                 self._update_depth_history(node.object_id, node.depth_used_m)
             self._update_centroid_history(node.object_id, node.pixel_center[0], node.pixel_center[1])
 
         # Gripper transitions.
         just_closed = gripper_closed and not self._gripper_was_closed
+        just_opened = not gripper_closed and self._gripper_was_closed
         if just_closed:
             self._held_object_id, self._held_object_source = self._attribute_held_object(nodes, eef_pos)
-        elif not gripper_closed:
-            self._held_object_id = None
 
-        # Localization flag reads _prev_ids (prev frame) and _held_object_id (just set).
-        flag = self._localization_flag(nodes, detection_frame, gripper_closed, just_closed)
+        # Localization flag must run before clearing _held_object_id so SLIP can read it.
+        flag = self._localization_flag(nodes, detection_frame, gripper_closed, just_closed, just_opened)
+
+        if not gripper_closed:
+            self._held_object_id = None
 
         # Gripper agent node + held_by_gripper edge.
         if gripper_closed:

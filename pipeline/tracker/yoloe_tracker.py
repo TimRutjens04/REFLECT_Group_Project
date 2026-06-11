@@ -575,6 +575,14 @@ def track_video_with_yoloe_redetect(
 
                 drawn = _draw_tracks(frame_bgr, result, label_names, id_map)
 
+                stable_id_by_label = {
+                    lbl: sid
+                    for lbl, sid in (
+                        (lbl, _stable.stable_id(lbl)) for lbl in label_names
+                    )
+                    if sid is not None
+                }
+
                 if validation_writer and vres is not None:
                     _write_validation_row(
                         result=result,
@@ -586,7 +594,9 @@ def track_video_with_yoloe_redetect(
                         last_detection_frame=last_detection_frame,
                         validation_writer=validation_writer,
                         id_map=id_map,
+                        stable_id_by_label=stable_id_by_label,
                     )
+
 
                 if tracking_writer:
                     _write_jsonl_rows(
@@ -600,6 +610,7 @@ def track_video_with_yoloe_redetect(
                         first_seen=_first_seen,
                         tracking_writer=tracking_writer,
                         id_map=id_map,
+                        stable_id_by_label=stable_id_by_label,
                     )
 
                 # Missing-label trigger
@@ -852,11 +863,14 @@ def _write_jsonl_rows(
     first_seen: dict,
     tracking_writer: JsonlWriter | None,
     id_map: dict[int, int] | None = None,
+    stable_id_by_label: dict[str, int] | None = None,
 ) -> None:
     """Build and write a TrackingFrame for one YOLOe tracking frame.
 
     ``id_map`` translates raw BoTSORT ids to re-ID-stable ids so object_id and
     the per-track derived fields (init area, displacement) survive re-primes.
+    ``stable_id_by_label`` is a label->permanent-id fallback so raw BoTSORT ids
+    never leak into the written object_id.
     """
     timestamp = frame_idx / fps
     boxes = result.boxes
@@ -868,10 +882,15 @@ def _write_jsonl_rows(
             x1, y1, x2, y2 = box.xyxy[0].cpu().tolist()
             cls_id = int(box.cls[0].cpu())
             conf = float(box.conf[0].cpu())
-            track_id = int(box.id[0].cpu()) if box.id is not None else -(i + 1)
-            if id_map is not None and track_id >= 0:
-                track_id = id_map.get(track_id, track_id)
+            raw_track_id = int(box.id[0].cpu()) if box.id is not None else -(i + 1)
             label = label_names[cls_id] if cls_id < len(label_names) else f"cls{cls_id}"
+            # Resolve to stable id: id_map first, then stable_id_by_label, never raw fallback.
+            if id_map is not None and raw_track_id >= 0 and raw_track_id in id_map:
+                track_id = id_map[raw_track_id]
+            elif stable_id_by_label is not None and label in stable_id_by_label:
+                track_id = stable_id_by_label[label]
+            else:
+                track_id = raw_track_id  # unregistered label (no seed yet)
             object_id = f"{label}_{track_id}" if track_id >= 0 else f"{label}_{i}"
 
             if tracking_writer:
@@ -940,6 +959,7 @@ def _write_validation_row(
     last_detection_frame: int,
     validation_writer: JsonlWriter,
     id_map: dict[int, int] | None = None,
+    stable_id_by_label: dict[str, int] | None = None,
 ) -> None:
     """Build and write a ValidationFrame with per-object flags.
 
@@ -948,6 +968,8 @@ def _write_validation_row(
       - ``bbox_size_change_flag`` <- validator "area_change"
       - ``drift_flag``            <- validator "drift"
       - ``recovery_trigger``      <- any check fired for that object
+    ``stable_id_by_label`` is a label->permanent-id fallback so raw BoTSORT ids
+    never leak into the written object_id.
     """
     timestamp = frame_idx / fps
     boxes = result.boxes
@@ -965,11 +987,16 @@ def _write_validation_row(
             x1, y1, x2, y2 = box.xyxy[0].cpu().tolist()
             cls_id = int(box.cls[0].cpu())
             conf = float(box.conf[0].cpu())
-            track_id = int(box.id[0].cpu())
-            if id_map is not None:
-                # vres.objects carry stable ids; translate before matching.
-                track_id = id_map.get(track_id, track_id)
+            raw_track_id = int(box.id[0].cpu())
             label = label_names[cls_id] if cls_id < len(label_names) else f"cls{cls_id}"
+            # Resolve to stable id: id_map first, then stable_id_by_label, never raw fallback.
+            # vres.objects carry stable ids so val_by_id lookup uses the same resolved id.
+            if id_map is not None and raw_track_id in id_map:
+                track_id = id_map[raw_track_id]
+            elif stable_id_by_label is not None and label in stable_id_by_label:
+                track_id = stable_id_by_label[label]
+            else:
+                track_id = raw_track_id  # unregistered label (no seed yet)
             object_id = f"{label}_{track_id}"
 
             ov = val_by_id.get(track_id)
