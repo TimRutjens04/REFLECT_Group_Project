@@ -140,7 +140,7 @@ def test_localization_wrong_object_from_detection():
 
 
 def test_localization_missing_on_disappearance():
-    builder = SceneGraphBuilder("seq")
+    builder = SceneGraphBuilder("seq", config=SceneGraphConfig(occlusion_buffer_frames=0))
     depth = _depth_with([(A, 1000.0), (B, 1000.0)])
     builder.build(_tracking_frame([_obj("apple_1", A), _obj("bowl_2", B)], 0), depth)
     frame = builder.build(_tracking_frame([_obj("apple_1", A)], 1), _depth_with([(A, 1000.0)]))
@@ -163,7 +163,7 @@ def test_assembler_roundtrip(tmp_path=None):
         0: _depth_with([(A, 1000.0), (B, 1000.0)]),
         1: _depth_with([(A, 1000.0)]),
     }
-    written = assemble(tracking_path, lambda fid: depths[fid], out_path)
+    written = assemble(tracking_path, lambda fid: depths[fid], out_path, config=SceneGraphConfig(occlusion_buffer_frames=0))
     assert written == 2
 
     rows = [json.loads(line) for line in open(out_path, encoding="utf-8") if line.strip()]
@@ -202,7 +202,7 @@ def test_gripper_node_and_held_edge():
 
 
 def test_slip_detection():
-    """Object held by gripper disappears while gripper remains closed → SLIP."""
+    """Object slips: tracker drops it while held, then gripper opens → SLIP on open."""
     builder = SceneGraphBuilder("seq", config=SceneGraphConfig(grip_approach_window=2))
     # apple_1 moves between frames so displacement attribution fires.
     builder.build(_tracking_frame([_obj("apple_1", A)], 0), _depth_with([(A, 1000.0)]))
@@ -212,15 +212,24 @@ def test_slip_detection():
         gripper_closed=True,
     )
     assert builder._held_object_id == "apple_1"
-    # Object disappears but gripper still closed.
-    frame = builder.build(
+    # Tracker drops object while gripper is still closed (arm occlusion) — NOT a slip yet.
+    frame_closed = builder.build(
         _tracking_frame([], 2),
         np.zeros((300, 300), dtype=np.float64),
         gripper_closed=True,
     )
-    assert frame.localization_flag.failure_detected is True
-    assert frame.localization_flag.type == LocalizationFailureType.SLIP
-    assert frame.localization_flag.affected_object_id == "apple_1"
+    assert frame_closed.localization_flag.failure_detected is False, "should not fire SLIP while gripper closed"
+    # Ghost node should still be present (gripper state confirms hold).
+    assert any(n.object_id == "apple_1" for n in frame_closed.nodes)
+    # Gripper opens; object still not visible to tracker → SLIP.
+    frame_open = builder.build(
+        _tracking_frame([], 3),
+        np.zeros((300, 300), dtype=np.float64),
+        gripper_closed=False,
+    )
+    assert frame_open.localization_flag.failure_detected is True
+    assert frame_open.localization_flag.type == LocalizationFailureType.SLIP
+    assert frame_open.localization_flag.affected_object_id == "apple_1"
 
 
 def test_no_grasp_when_no_depth():
@@ -234,6 +243,41 @@ def test_no_grasp_when_no_depth():
     )
     assert frame.localization_flag.failure_detected is True
     assert frame.localization_flag.type == LocalizationFailureType.NO_GRASP
+
+
+def test_occlusion_buffer_ghost_node():
+    """Object absent from tracker is re-emitted as OCCLUDED ghost; MISSING fires after buffer expires."""
+    builder = SceneGraphBuilder("seq", config=SceneGraphConfig(occlusion_buffer_frames=2))
+    depth = _depth_with([(A, 1000.0), (B, 1000.0)])
+    builder.build(_tracking_frame([_obj("apple_1", A), _obj("bowl_2", B)], 0), depth)
+
+    # Frame 1: bowl_2 absent — should appear as ghost, no MISSING yet.
+    frame1 = builder.build(_tracking_frame([_obj("apple_1", A)], 1), _depth_with([(A, 1000.0)]))
+    ghost_ids = [n.object_id for n in frame1.nodes]
+    assert "bowl_2" in ghost_ids, "ghost node missing on first absence"
+    ghost = next(n for n in frame1.nodes if n.object_id == "bowl_2")
+    assert ghost.status == NodeStatus.OCCLUDED
+    assert frame1.localization_flag.failure_detected is False
+
+    # Frame 2: still absent — still ghost.
+    frame2 = builder.build(_tracking_frame([_obj("apple_1", A)], 2), _depth_with([(A, 1000.0)]))
+    assert any(n.object_id == "bowl_2" for n in frame2.nodes)
+    assert frame2.localization_flag.failure_detected is False
+
+    # Frame 3: buffer expired (occlusion_buffer_frames=2) → evicted → MISSING fires.
+    frame3 = builder.build(_tracking_frame([_obj("apple_1", A)], 3), _depth_with([(A, 1000.0)]))
+    assert not any(n.object_id == "bowl_2" for n in frame3.nodes)
+    assert frame3.localization_flag.failure_detected is True
+    assert frame3.localization_flag.type == LocalizationFailureType.MISSING
+    assert frame3.localization_flag.affected_object_id == "bowl_2"
+
+    # Frame 4: object reappears — buffer clears, back to OK.
+    frame4 = builder.build(
+        _tracking_frame([_obj("apple_1", A), _obj("bowl_2", B)], 4),
+        _depth_with([(A, 1000.0), (B, 1000.0)]),
+    )
+    reappeared = next(n for n in frame4.nodes if n.object_id == "bowl_2")
+    assert reappeared.status == NodeStatus.OK
 
 
 def _run_all():
