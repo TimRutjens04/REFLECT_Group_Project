@@ -6,9 +6,11 @@
 
 ## Why this exists
 
-The [REFLECT paper](https://robot-reflect.github.io/) proposes a multimodal framework for analysing robot execution failures using video, audio, and scene graphs. Their original pipeline is designed for the **RoboFail** dataset, this is a curated set of simulated and real robot trajectories and relies on data structures and pre-processing steps.
+The REFLECT framework provides a strong foundation for robot failure analysis through multimodal reasoning. However, the original implementation was not designed around our specific research requirements and made it difficult to integrate newer vision models and experiment with alternative detection and tracking approaches.
 
-When we tried to apply REFLECT to **real-world recordings from a UR5e robot arm**, the original pipeline did not fit: different data layout, no guaranteed static scene, and real tracking noise (motion blur, occlusion, lighting changes). So we built ARGUS: a new detection–tracking pipeline designed from scratch.
+For our work, we wanted a more modular architecture where individual components could be replaced, evaluated, and improved independently. This allows us to rapidly test new object detectors, trackers, validation strategies, and scene understanding methods without being constrained by the original pipeline design.
+
+ARGUS was therefore developed as a ground-up reimplementation of the perception pipeline. It follows the object-centric philosophy of REFLECT while providing a flexible foundation for experimentation with modern vision models and future extensions.
 
 ---
 
