@@ -1,18 +1,29 @@
+import argparse
 from pathlib import Path
 
 from reflect_pipeline.data_loader.task_loader import TaskLoader
 from reflect_pipeline.detector.GroundingDinoDetector import GroundingDinoDetector, DetectorConfig
 from reflect_pipeline.run_pipeline import run_task
 
-# Which task to run: set to a task ID (e.g. 1) for a single task, or None for all tasks.
-TASK_ID: int | None = 1
+_EXAMPLE_DATA = Path(__file__).resolve().parents[3] / "example_data"
 
 
 def main():
-    data_dir = Path(__file__).resolve().parents[1] / "example_data"
-    loader = TaskLoader(data_dir)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", type=Path, default=None, help="Path to data/ directory (contains real_data/ and tasks_real_world.json). Defaults to example_data/ if not provided.")
+    parser.add_argument("--task-id", type=int, default=1, help="Task ID to run (default: 1)")
+    args = parser.parse_args()
 
-    task_ids = loader.all_task_ids() if TASK_ID is None else [TASK_ID]
+    if args.data_dir is not None:
+        data_dir = args.data_dir
+    elif _EXAMPLE_DATA.exists():
+        data_dir = _EXAMPLE_DATA
+        print(f"No --data-dir provided, using example_data: {data_dir}")
+    else:
+        raise FileNotFoundError("No --data-dir provided and example_data/ not found. Pass --data-dir <path/to/data>.")
+
+    loader = TaskLoader(data_dir)
+    task_ids = loader.all_task_ids() if args.task_id is None else [args.task_id]
 
     detector = GroundingDinoDetector(DetectorConfig())
     detector.load()
