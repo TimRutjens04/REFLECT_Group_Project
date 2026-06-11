@@ -92,3 +92,6 @@ track/
 depth/
 data/
 example_data/
+
+# Model checkpoints
+checkpoints/
