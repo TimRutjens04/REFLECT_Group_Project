@@ -89,3 +89,14 @@ segment/
 track/
 visuals/
 depth/
+
+example_data/**
+
+# Keep the directory structure
+!example_data/real_data/putAppleBowl1
+
+# Keep the JSON file
+!example_data/tasks_real_world.json
+
+# Extracted frames (large; regenerate with pipeline/scripts/extract_frames.py)
+example_data/real_data/*/frames/
