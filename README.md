@@ -6,9 +6,11 @@
 
 ## Why this exists
 
-The [REFLECT paper](https://robot-reflect.github.io/) proposes a multimodal framework for analysing robot execution failures using video, audio, and scene graphs. Their original pipeline is designed for the **RoboFail** dataset, this is a curated set of simulated and real robot trajectories and relies on data structures and pre-processing steps.
+The REFLECT framework provides a strong foundation for robot failure analysis through multimodal reasoning. However, the original implementation was not designed around our specific research requirements and made it difficult to integrate newer vision models and experiment with alternative detection and tracking approaches.
 
-When we tried to apply REFLECT to **real-world recordings from a UR5e robot arm**, the original pipeline did not fit: different data layout, no guaranteed static scene, and real tracking noise (motion blur, occlusion, lighting changes). So we built ARGUS: a new detection–tracking pipeline designed from scratch.
+For our work, we wanted a more modular architecture where individual components could be replaced, evaluated, and improved independently. This allows us to rapidly test new object detectors, trackers, validation strategies, and scene understanding methods without being constrained by the original pipeline design.
+
+ARGUS was therefore developed as a ground-up reimplementation of the perception pipeline. It follows the object-centric philosophy of REFLECT while providing a flexible foundation for experimentation with modern vision models and future extensions.
 
 ---
 
@@ -44,13 +46,13 @@ here should be full architecture image
 
 **Detection overlay - frame 0 (`putAppleBowl1`)**
 
-![Detection step 0](real_world/images/detection_step_0.png)
+Generated at runtime: `outputs/<run_id>/images/detection_step_0.png`
 
 Both the red apple (conf 0.93) and dark blue bowl (conf 0.85) are detected by Grounding DINO on the first frame. YOLOE is then seeded with these bounding boxes as visual prompts and tracks through the rest of the episode.
 
 **Tracked video**
 
-`real_world/videos/tracked_putAppleBowl1.mp4` - YOLOE bounding boxes rendered green; Grounding DINO re-detection frames rendered in orange (`GDINO: <label>`).
+`pipeline/outputs/<run_id>/videos/tracked_putAppleBowl1.mp4` - YOLOE bounding boxes rendered green; Grounding DINO re-detection frames rendered in orange (`GDINO: <label>`).
 
 **Detection JSONL snippet**
 
@@ -85,7 +87,7 @@ uv sync
 uv run python main.py
 ```
 
-Results land in `pipeline/real_world/`.
+Results land in `outputs/<run_id>/` (relative to the `pipeline/` directory), where `<run_id>` is a timestamped folder per run, e.g. `outputs/20260610_141523_putAppleBowl1/` (see Output layout below).
 
 ---
 
@@ -165,20 +167,32 @@ example_data/
 
 ### Output layout
 
+Every pipeline run gets its own timestamped folder under `pipeline/outputs/`, named `<YYYYMMDD_HHMMSS>_<task_folder_name>`:
+
 ```
-pipeline/real_world/
-├── images/
-│   └── detection_step_0.png          # detection overlay for frame 0
-├── jsonl/
-│   ├── detections.jsonl              # one JSON object per detection event
-│   └── tracking.jsonl               # one JSON object per tracked frame
-├── state_summary/
-│   └── detection/
-│       ├── frame_0000.json           # full detection state at frame 0
-│       ├── frame_0030.json           # ... and every re-detect trigger
-│       └── ...
-└── videos/
-    └── tracked_<task_name>.mp4       # annotated output video
+pipeline/outputs/
+└── 20260610_141523_putAppleBowl1/    # one folder per run
+    ├── run_metadata.json             # run ID, task, config, git commit
+    ├── images/
+    │   └── detection_step_0.png      # detection overlay for frame 0
+    ├── jsonl/
+    │   ├── detections.jsonl          # one JSON object per detection event
+    │   ├── tracking.jsonl            # one JSON object per tracked frame
+    │   └── validation.jsonl          # validator handoff consumed by the depth stage
+    ├── state_summary/
+    │   └── detection/
+    │       ├── frame_0000.json       # full detection state at frame 0
+    │       ├── frame_0030.json       # ... and every re-detect trigger
+    │       └── ...
+    ├── videos/
+    │   └── tracked_<task_name>.mp4   # annotated output video
+    └── depth/                        # depth + scene graph stage outputs
+        ├── <seq>__depth.jsonl
+        ├── <seq>__scene_graph.jsonl
+        ├── <seq>__keyframes.json
+        ├── plots/
+        ├── visualizations/
+        └── graph_visualizations/
 ```
 
 #### `detections.jsonl` fields

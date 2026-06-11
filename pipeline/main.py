@@ -1,119 +1,26 @@
 from pathlib import Path
 
-from data_loader.rgbd_loader import VideoRgbdFrameProvider
 from data_loader.task_loader import TaskLoader
-from data_loader.workspace import setup_workspace
 from detector.GroundingDinoDetector import GroundingDinoDetector, DetectorConfig
-from detector.runner import DetectionRunner
-from detector.prompt_strategy import PromptStrategy
-from models.base import JsonlWriter
-from models.detection import TriggerReason
-from tracker.sam2_tracker_redetect import track_video_with_sam2
-from scripts.notebook_helpers import detection_result_to_pil
-from tracker.validator import CompositeTrackingValidator
-from tracker.yoloe_tracker import track_video_with_yoloe_redetect
-from tracker.yoloe_tracker2 import track_video_with_yoloe
-from detector.locateanything import LocateAnythingDetector
-from depth.pipeline_depth import run_depth_scene_graph
+from run_pipeline import run_task
+
+# Which task to run: set to a task ID (e.g. 1) for a single task, or None for all tasks.
+TASK_ID: int | None = 1
 
 
 def main():
     data_dir = Path(__file__).resolve().parents[1] / "example_data"
-    setup_workspace(data_dir)
     loader = TaskLoader(data_dir)
-    task = loader.get(1)
-    provider = VideoRgbdFrameProvider(task)
 
-    # --- Detection on frame 0 ---
-    frame0 = provider.get_frame(0)
-    print(
-        f"Loaded frame {frame0.step_idx} with RGB shape {frame0.rgb.shape} and depth shape {frame0.depth.shape}"
-    )
-
-    jsonl_dir = Path("real_world/jsonl")
-    detection_writer = JsonlWriter(jsonl_dir / "detections.jsonl")
-    tracking_writer = JsonlWriter(jsonl_dir / "tracking.jsonl")
-    validation_writer = JsonlWriter(jsonl_dir / "validation.jsonl")
+    task_ids = loader.all_task_ids() if TASK_ID is None else [TASK_ID]
 
     detector = GroundingDinoDetector(DetectorConfig())
     detector.load()
 
-    runner = DetectionRunner(
-        detector=detector,
-        strategy=PromptStrategy(),
-        log_dir=Path("real_world/state_summary/detection"),
-        jsonl_writer=detection_writer,
-    )
-
-    detection_result = runner.run(frame0, task, trigger_reason=TriggerReason.INIT)
-
-    output_dir = Path("real_world/images")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    detection_img = detection_result_to_pil(frame0, detection_result)
-    detection_path = output_dir / f"detection_step_{frame0.step_idx}.png"
-    detection_img.save(detection_path)
-    print(f"Detection result: {detection_result}")
-    print(f"Saved detection image to {detection_path.resolve()}")
-
-    color_video = provider.color_path
-
-    tracked_output = Path("real_world/videos") / f"tracked_{task.folder_name}.mp4"
-    track_video_with_yoloe_redetect(
-        video_path=color_video,
-        initial_detection_result=detection_result,
-        output_path=tracked_output,
-        frame_step=1,
-        sequence_id=task.folder_name,
-        detection_writer=detection_writer,
-        tracking_writer=tracking_writer,
-        validation_writer=validation_writer,
-        redetect_every_n_frames=30,
-        provider=provider,
-        detection_runner=runner,
-        task=task,
-        redetect_on_lost=False,
-        redetect_on_invalid=True,
-        validator=CompositeTrackingValidator(),
-        validate_with_depth=True,
-        dedupe_by_label=True,
-    )
-
-    # --- Depth + scene graph ---
-    # Consumes the tracker/validator handoff JSONL and reads RGB/depth frames
-    # through the same data loader provider used above.
-    validation_jsonl = jsonl_dir / "validation.jsonl"
-    run_depth_scene_graph(
-        tracking_jsonl=validation_jsonl,
-        provider=provider,
-    )
-    # track_video_with_yoloe(
-    #     video_path=color_video,
-    #     detection_result=detection_result,
-    #     output_path=Path("real_world/videos")
-    #     / f"tracked_no_redetect_{task.folder_name}.mp4",
-    #     frame_step=1,
-    #     sequence_id=task.folder_name,
-    #     detection_writer=detection_writer,
-    #     tracking_writer=tracking_writer,
-    # )
-    # tracked_output = Path("real_world/videos") / f"trackedsam2_{task.folder_name}.mp4"
-    # track_video_with_sam2(
-    #     video_path=color_video,
-    #     detection_result=detection_result,
-    #     output_path=tracked_output,
-    #     model_name="sam2_b.pt",
-    #     frame_step=1,
-    # )
-    # tracked_output = Path("real_world/videos") / f"tracked_{task.folder_name}.mp4"
-    # track_video_with_sam2(
-    #     video_path=color_video,
-    #     output_path=tracked_output,
-    #     detection_runner=runner,
-    #     provider=provider,
-    #     task=task,
-    #     redetect_every=30,
-    # )
+    for tid in task_ids:
+        task = loader.get(tid)
+        print(f"\n=== Task {tid}: {task.name} ({task.folder_name}) ===")
+        run_task(task, data_dir, detector)
 
 
 if __name__ == "__main__":
