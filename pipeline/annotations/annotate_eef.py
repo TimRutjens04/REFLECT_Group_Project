@@ -9,9 +9,9 @@ Saves annotations to pipeline/eef_annotations.json, then solves for
 T_cam_robot via SVD and writes it to pipeline/T_cam_robot.npy.
 
 Usage:
-    poetry run python3 pipeline/annotate_eef.py
-    poetry run python3 pipeline/annotate_eef.py --frames 16
-    poetry run python3 pipeline/annotate_eef.py --solve-only
+    uv run python3 pipeline/annotate_eef.py
+    uv run python3 pipeline/annotate_eef.py --frames 16
+    uv run python3 pipeline/annotate_eef.py --solve-only
 """
 
 from __future__ import annotations

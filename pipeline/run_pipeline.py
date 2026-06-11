@@ -15,6 +15,7 @@ from scripts.notebook_helpers import detection_result_to_pil
 from tracker.validator import CompositeTrackingValidator
 from tracker.yoloe_tracker import track_video_with_yoloe_redetect
 from scene_graph.build_scene_graphs import assemble as assemble_scene_graph
+from scene_graph.visualize_scene_graph import render_mp4 as render_sg_mp4
 
 RUN_CONFIG = {
     "redetect_every_n_frames": 30,
@@ -157,6 +158,16 @@ def run_task(task: Task, data_dir: Path, detector: GroundingDinoDetector) -> Pat
         T_cam_robot=T_cam_robot,
     )
     print(f"Scene graph: {written} frames → {sg_out}")
+
+    # --- Visualize scene graph ---
+    render_sg_mp4(
+        sg_path=sg_out,
+        video_path=color_video,
+        out_dir=run_root / "videos",
+        fps=5,
+        keyframes_only=True,
+        out_filename=f"scene_graph_{task.folder_name}.mp4",
+    )
     # track_video_with_yoloe(
     #     video_path=color_video,
     #     detection_result=detection_result,

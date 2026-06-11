@@ -8,17 +8,17 @@ relation type).  Outputs a PNG keyframe strip and/or an MP4.
 Usage
 -----
     # Keyframe strip PNG (flag frames + sampled normal)
-    poetry run python3 visualize_scene_graph.py \
+    uv run python3 visualize_scene_graph.py \
         --sg /tmp/scene_graph_putAppleBowl1.jsonl \
         --video example_data/real_data/putAppleBowl1/videos/color.mp4 \
         --out /tmp/sg_vis
 
     # Full MP4 (every frame, left=bbox overlay, right=scene graph)
-    poetry run python3 visualize_scene_graph.py \
+    uv run python3 visualize_scene_graph.py \
         --sg ... --video ... --out /tmp/sg_vis --mp4 --fps 10
 
     # Flag-frames-only MP4
-    poetry run python3 visualize_scene_graph.py ... --mp4 --keyframes-only
+    uv run python3 visualize_scene_graph.py ... --mp4 --keyframes-only
 """
 
 from __future__ import annotations
@@ -297,6 +297,7 @@ def render_mp4(
     out_dir: str | Path,
     fps: int = 10,
     keyframes_only: bool = False,
+    out_filename: str | None = None,
 ) -> Path:
     """MP4: left = bbox overlay, right = scene graph on faint frame ghost."""
     out_dir = Path(out_dir)
@@ -314,7 +315,7 @@ def render_mp4(
     img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     out_w, out_h = img_w * 2, img_h
-    fname = "keyframes.mp4" if keyframes_only else "scene_graph.mp4"
+    fname = out_filename or ("keyframes.mp4" if keyframes_only else "scene_graph.mp4")
     out_path = out_dir / fname
     writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (out_w, out_h))
 
