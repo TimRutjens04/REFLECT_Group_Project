@@ -15,6 +15,8 @@ from reflect_pipeline.scripts.notebook_helpers import detection_result_to_pil
 from reflect_pipeline.tracker.validator import CompositeTrackingValidator
 from reflect_pipeline.tracker.yoloe_tracker import track_video_with_yoloe_redetect
 from reflect_pipeline.depth.pipeline_depth import run_depth_scene_graph
+from reflect_pipeline.scene_graph.build_scene_graphs import assemble as assemble_scene_graph
+from reflect_pipeline.scene_graph.visualize_scene_graph import render_mp4 as render_sg_mp4
 
 RUN_CONFIG = {
     "redetect_every_n_frames": 30,
@@ -106,14 +108,66 @@ def run_task(task: Task, data_dir: Path, detector: GroundingDinoDetector) -> Pat
         dedupe_by_label=RUN_CONFIG["dedupe_by_label"],
     )
 
-    # --- Depth + scene graph ---
-    # Consumes the tracker/validator handoff JSONL and reads RGB/depth frames
-    # through the same data loader provider used above.
+    # --- Scene graph ---
+    import zarr
+    import numpy as np
+
     validation_jsonl = jsonl_dir / "validation.jsonl"
-    run_depth_scene_graph(
-        tracking_jsonl=validation_jsonl,
-        provider=provider,
-        output_dir=run_root / "depth",
+    sg_out = jsonl_dir / "scene_graph.jsonl"
+
+    # depth fn: pull depth frame from the same provider used above
+    def depth_fn(frame_id: int):
+        return provider.get_frame(frame_id).depth
+
+    # gripper fn: zarr gripper states, timestamps normalised to relative 0-base
+    gripper_fn = None
+    gripper_result = provider.load_gripper_states()
+    if gripper_result is not None:
+        zarr_ts, gripper_closed = gripper_result
+        zarr_ts_rel = zarr_ts - zarr_ts[0]
+        def _gripper_fn(frame_id: int, timestamp: float) -> bool:
+            idx = int(np.searchsorted(zarr_ts_rel, timestamp).clip(0, len(zarr_ts_rel) - 1))
+            return bool(gripper_closed[idx])
+        gripper_fn = _gripper_fn
+
+    # eef fn: robot EEF XYZ from zarr replay buffer
+    eef_fn = None
+    zarr_path = Path(task.task_root) / "replay_buffer.zarr"
+    if zarr_path.exists():
+        zr = zarr.open_group(str(zarr_path), mode="r")
+        eef_ts = np.array(zr["data/timestamp"][:])
+        eef_poses = np.array(zr["data/robot_eef_pose"][:, :3])
+        eef_ts_rel = eef_ts - eef_ts[0]
+        def _eef_fn(frame_id: int, timestamp: float) -> np.ndarray:
+            idx = int(np.searchsorted(eef_ts_rel, timestamp).clip(0, len(eef_ts_rel) - 1))
+            return eef_poses[idx]
+        eef_fn = _eef_fn
+
+    # T_cam_robot: camera-robot extrinsics (optional)
+    T_cam_robot = None
+    t_path = Path(__file__).resolve().parent / "annotations" / "T_cam_robot.npy"
+    if t_path.exists():
+        T_cam_robot = np.load(str(t_path))
+
+    written = assemble_scene_graph(
+        tracking_path=validation_jsonl,
+        depth_fn=depth_fn,
+        out_path=sg_out,
+        detection_path=jsonl_dir / "detections.jsonl",
+        gripper_fn=gripper_fn,
+        eef_fn=eef_fn,
+        T_cam_robot=T_cam_robot,
+    )
+    print(f"Scene graph: {written} frames → {sg_out}")
+
+    # --- Visualize scene graph ---
+    render_sg_mp4(
+        sg_path=sg_out,
+        video_path=color_video,
+        out_dir=run_root / "videos",
+        fps=5,
+        keyframes_only=True,
+        out_filename=f"scene_graph_{task.folder_name}.mp4",
     )
     # track_video_with_yoloe(
     #     video_path=color_video,
