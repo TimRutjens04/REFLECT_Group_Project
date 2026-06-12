@@ -1,0 +1,31 @@
+[project]
+name = "livescene"
+version = "0.1.0"
+description = "Live scene-graph webcam demo: YOLOE + BoTSORT + Depth Anything V2 -> live spatial-relation graph"
+readme = "README.md"
+authors = [
+    { name = "TimIraca", email = "tim@iraca.nl" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "ultralytics>=8.3.0",
+    "torch>=2.4",
+    "torchvision",
+    "transformers>=4.45",
+    "opencv-python>=4.9",
+    "numpy",
+    "pillow",
+    "lap>=0.5.13",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"
+
+# Standalone project: declare our own workspace root so uv never attaches
+# this project to an ancestor workspace.
+[tool.uv.workspace]
+members = []

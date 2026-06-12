@@ -1,0 +1,10 @@
+# model weights downloaded at first run
+*.pt
+*.ts
+# venv / build
+.venv/
+dist/
+__pycache__/
+*.egg-info/
+# headless outputs
+out/
