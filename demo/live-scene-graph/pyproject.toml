@@ -16,6 +16,7 @@ dependencies = [
     "numpy",
     "pillow",
     "lap>=0.5.13",
+    "clip",
 ]
 
 [dependency-groups]
@@ -29,3 +30,6 @@ build-backend = "uv_build"
 # this project to an ancestor workspace.
 [tool.uv.workspace]
 members = []
+
+[tool.uv.sources]
+clip = { git = "https://github.com/ultralytics/CLIP.git" }
