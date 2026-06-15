@@ -1,7 +1,14 @@
+from __future__ import annotations
+
 import json
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
+
+import numpy as np
+import zarr
 
 from data_loader.rgbd_loader import VideoRgbdFrameProvider
 from data_loader.task_loader import Task
@@ -9,6 +16,7 @@ from data_loader.workspace import setup_workspace
 from detector.GroundingDinoDetector import GroundingDinoDetector
 from detector.runner import DetectionRunner
 from detector.prompt_strategy import PromptStrategy
+from interfaces.IFrameInput import RgbdFrameProvider
 from models.base import JsonlWriter
 from models.detection import TriggerReason
 from scripts.notebook_helpers import detection_result_to_pil
@@ -16,6 +24,9 @@ from tracker.validator import CompositeTrackingValidator
 from tracker.yoloe_tracker import track_video_with_yoloe_redetect
 from scene_graph.build_scene_graphs import assemble as assemble_scene_graph
 from scene_graph.visualize_scene_graph import render_mp4 as render_sg_mp4
+
+GripperFn = Callable[[int, float], bool]
+EefFn = Callable[[int, float], np.ndarray]
 
 RUN_CONFIG = {
     "redetect_every_n_frames": 30,
@@ -36,30 +47,91 @@ def _git_commit() -> str | None:
         return None
 
 
-def run_task(task: Task, data_dir: Path, detector: GroundingDinoDetector) -> Path:
+@dataclass
+class EpisodeInput:
+    provider: RgbdFrameProvider
+    object_list: list[str]
+    sequence_id: str
+    gripper_fn: GripperFn | None = None
+    eef_fn: EefFn | None = None
+    T_cam_robot: np.ndarray | None = None
+    video_path: Path | None = None
+
+    @classmethod
+    def from_task(cls, task: Task) -> "EpisodeInput":
+        provider = VideoRgbdFrameProvider(task)
+        gripper_fn, eef_fn = _load_proprioception(provider, task)
+        T_cam_robot = _load_T_cam_robot()
+        return cls(
+            provider=provider,
+            object_list=task.object_list,
+            sequence_id=task.folder_name,
+            gripper_fn=gripper_fn,
+            eef_fn=eef_fn,
+            T_cam_robot=T_cam_robot,
+            video_path=provider.color_path,
+        )
+
+
+def _load_proprioception(
+    provider: VideoRgbdFrameProvider, task: Task
+) -> tuple[GripperFn | None, EefFn | None]:
+    gripper_fn: GripperFn | None = None
+    gripper_result = provider.load_gripper_states()
+    if gripper_result is not None:
+        zarr_ts, gripper_closed = gripper_result
+        zarr_ts_rel = zarr_ts - zarr_ts[0]
+
+        def _gripper_fn(frame_id: int, timestamp: float) -> bool:
+            idx = int(np.searchsorted(zarr_ts_rel, timestamp).clip(0, len(zarr_ts_rel) - 1))
+            return bool(gripper_closed[idx])
+
+        gripper_fn = _gripper_fn
+
+    eef_fn: EefFn | None = None
+    zarr_path = Path(task.task_root) / "replay_buffer.zarr"
+    if zarr_path.exists():
+        zr = zarr.open_group(str(zarr_path), mode="r")
+        eef_ts = np.array(zr["data/timestamp"][:])
+        eef_poses = np.array(zr["data/robot_eef_pose"][:, :3])
+        eef_ts_rel = eef_ts - eef_ts[0]
+
+        def _eef_fn(frame_id: int, timestamp: float) -> np.ndarray:
+            idx = int(np.searchsorted(eef_ts_rel, timestamp).clip(0, len(eef_ts_rel) - 1))
+            return eef_poses[idx]
+
+        eef_fn = _eef_fn
+
+    return gripper_fn, eef_fn
+
+
+def _load_T_cam_robot() -> np.ndarray | None:
+    t_path = Path(__file__).resolve().parent / "annotations" / "T_cam_robot.npy"
+    if t_path.exists():
+        return np.load(str(t_path))
+    return None
+
+
+def run_episode(ep: EpisodeInput, detector: GroundingDinoDetector, out_dir: Path) -> Path:
     started_at = datetime.now()
-    run_id = f"{started_at.strftime('%Y%m%d_%H%M%S')}_{task.folder_name}"
-    run_root = setup_workspace(data_dir, run_id=run_id)
+    run_id = f"{started_at.strftime('%Y%m%d_%H%M%S')}_{ep.sequence_id}"
+    run_root = setup_workspace(out_dir, run_id=run_id)
 
     metadata = {
         "run_id": run_id,
         "started_at": started_at.isoformat(),
-        "task_id": task.task_id,
-        "task_name": task.name,
-        "sequence_id": task.folder_name,
-        "object_list": task.object_list,
+        "sequence_id": ep.sequence_id,
+        "object_list": ep.object_list,
         "git_commit": _git_commit(),
         "config": RUN_CONFIG,
     }
     (run_root / "run_metadata.json").write_text(json.dumps(metadata, indent=2))
     print(f"Run ID: {run_id}  →  {run_root}")
 
-    provider = VideoRgbdFrameProvider(task)
-
-    # --- Detection on frame 0 ---
-    frame0 = provider.get_frame(0)
+    frame0 = ep.provider.get_frame(0)
     print(
-        f"Loaded frame {frame0.step_idx} with RGB shape {frame0.rgb.shape} and depth shape {frame0.depth.shape}"
+        f"Loaded frame {frame0.step_idx} with RGB shape {frame0.rgb.shape} "
+        f"and depth shape {frame0.depth.shape}"
     )
 
     jsonl_dir = run_root / "jsonl"
@@ -74,32 +146,37 @@ def run_task(task: Task, data_dir: Path, detector: GroundingDinoDetector) -> Pat
         jsonl_writer=detection_writer,
     )
 
-    detection_result = runner.run(frame0, task, trigger_reason=TriggerReason.INIT)
+    class _EpTask:
+        object_list = ep.object_list
+        folder_name = ep.sequence_id
+
+    ep_task = _EpTask()
+    detection_result = runner.run(frame0, ep_task, trigger_reason=TriggerReason.INIT)
 
     output_dir = run_root / "images"
-
     detection_img = detection_result_to_pil(frame0, detection_result)
     detection_path = output_dir / f"detection_step_{frame0.step_idx}.png"
     detection_img.save(detection_path)
     print(f"Detection result: {detection_result}")
     print(f"Saved detection image to {detection_path.resolve()}")
 
-    color_video = provider.color_path
+    n = ep.provider.n_frames
+    frames_iter = ((i, ep.provider.get_frame(i).rgb) for i in range(n))
 
-    tracked_output = run_root / "videos" / f"tracked_{task.folder_name}.mp4"
+    tracked_output = run_root / "videos" / f"tracked_{ep.sequence_id}.mp4"
     track_video_with_yoloe_redetect(
-        video_path=color_video,
+        frames=frames_iter,
         initial_detection_result=detection_result,
         output_path=tracked_output,
         frame_step=1,
-        sequence_id=task.folder_name,
+        sequence_id=ep.sequence_id,
         detection_writer=detection_writer,
         tracking_writer=tracking_writer,
         validation_writer=validation_writer,
         redetect_every_n_frames=RUN_CONFIG["redetect_every_n_frames"],
-        provider=provider,
+        provider=ep.provider,
         detection_runner=runner,
-        task=task,
+        task=ep_task,
         redetect_on_lost=RUN_CONFIG["redetect_on_lost"],
         redetect_on_invalid=RUN_CONFIG["redetect_on_invalid"],
         validator=CompositeTrackingValidator(),
@@ -108,91 +185,28 @@ def run_task(task: Task, data_dir: Path, detector: GroundingDinoDetector) -> Pat
     )
 
     # --- Scene graph ---
-    import zarr
-    import numpy as np
-
     validation_jsonl = jsonl_dir / "validation.jsonl"
     sg_out = jsonl_dir / "scene_graph.jsonl"
 
-    # depth fn: pull depth frame from the same provider used above
-    def depth_fn(frame_id: int):
-        return provider.get_frame(frame_id).depth
-
-    # gripper fn: zarr gripper states, timestamps normalised to relative 0-base
-    gripper_fn = None
-    gripper_result = provider.load_gripper_states()
-    if gripper_result is not None:
-        zarr_ts, gripper_closed = gripper_result
-        zarr_ts_rel = zarr_ts - zarr_ts[0]
-        def _gripper_fn(frame_id: int, timestamp: float) -> bool:
-            idx = int(np.searchsorted(zarr_ts_rel, timestamp).clip(0, len(zarr_ts_rel) - 1))
-            return bool(gripper_closed[idx])
-        gripper_fn = _gripper_fn
-
-    # eef fn: robot EEF XYZ from zarr replay buffer
-    eef_fn = None
-    zarr_path = Path(task.task_root) / "replay_buffer.zarr"
-    if zarr_path.exists():
-        zr = zarr.open_group(str(zarr_path), mode="r")
-        eef_ts = np.array(zr["data/timestamp"][:])
-        eef_poses = np.array(zr["data/robot_eef_pose"][:, :3])
-        eef_ts_rel = eef_ts - eef_ts[0]
-        def _eef_fn(frame_id: int, timestamp: float) -> np.ndarray:
-            idx = int(np.searchsorted(eef_ts_rel, timestamp).clip(0, len(eef_ts_rel) - 1))
-            return eef_poses[idx]
-        eef_fn = _eef_fn
-
-    # T_cam_robot: camera-robot extrinsics (optional)
-    T_cam_robot = None
-    t_path = Path(__file__).resolve().parent / "annotations" / "T_cam_robot.npy"
-    if t_path.exists():
-        T_cam_robot = np.load(str(t_path))
-
     written = assemble_scene_graph(
         tracking_path=validation_jsonl,
-        depth_fn=depth_fn,
+        depth_fn=lambda fid: ep.provider.get_frame(fid).depth,
         out_path=sg_out,
         detection_path=jsonl_dir / "detections.jsonl",
-        gripper_fn=gripper_fn,
-        eef_fn=eef_fn,
-        T_cam_robot=T_cam_robot,
+        gripper_fn=ep.gripper_fn,
+        eef_fn=ep.eef_fn,
+        T_cam_robot=ep.T_cam_robot,
     )
     print(f"Scene graph: {written} frames → {sg_out}")
 
-    # --- Visualize scene graph ---
-    render_sg_mp4(
-        sg_path=sg_out,
-        video_path=color_video,
-        out_dir=run_root / "videos",
-        fps=5,
-        keyframes_only=True,
-        out_filename=f"scene_graph_{task.folder_name}.mp4",
-    )
-    # track_video_with_yoloe(
-    #     video_path=color_video,
-    #     detection_result=detection_result,
-    #     output_path=Path("real_world/videos")
-    #     / f"tracked_no_redetect_{task.folder_name}.mp4",
-    #     frame_step=1,
-    #     sequence_id=task.folder_name,
-    #     detection_writer=detection_writer,
-    #     tracking_writer=tracking_writer,
-    # )
-    # tracked_output = Path("real_world/videos") / f"trackedsam2_{task.folder_name}.mp4"
-    # track_video_with_sam2(
-    #     video_path=color_video,
-    #     detection_result=detection_result,
-    #     output_path=tracked_output,
-    #     model_name="sam2_b.pt",
-    #     frame_step=1,
-    # )
-    # tracked_output = Path("real_world/videos") / f"tracked_{task.folder_name}.mp4"
-    # track_video_with_sam2(
-    #     video_path=color_video,
-    #     output_path=tracked_output,
-    #     detection_runner=runner,
-    #     provider=provider,
-    #     task=task,
-    #     redetect_every=30,
-    # )
+    if ep.video_path is not None:
+        render_sg_mp4(
+            sg_path=sg_out,
+            video_path=ep.video_path,
+            out_dir=run_root / "videos",
+            fps=5,
+            keyframes_only=True,
+            out_filename=f"scene_graph_{ep.sequence_id}.mp4",
+        )
+
     return run_root

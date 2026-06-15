@@ -2,7 +2,7 @@ from pathlib import Path
 
 from data_loader.task_loader import TaskLoader
 from detector.GroundingDinoDetector import GroundingDinoDetector, DetectorConfig
-from run_pipeline import run_task
+from run_pipeline import EpisodeInput, run_episode
 
 # Which task to run: set to a task ID (e.g. 1) for a single task, or None for all tasks.
 TASK_ID: int | None = 1
@@ -20,7 +20,7 @@ def main():
     for tid in task_ids:
         task = loader.get(tid)
         print(f"\n=== Task {tid}: {task.name} ({task.folder_name}) ===")
-        run_task(task, data_dir, detector)
+        run_episode(EpisodeInput.from_task(task), detector, out_dir=data_dir)
 
 
 if __name__ == "__main__":
