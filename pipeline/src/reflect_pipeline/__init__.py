@@ -1,4 +1,4 @@
-from reflect_pipeline.run_pipeline import run_task
+from reflect_pipeline.run_pipeline import run_episode, EpisodeInput
 from reflect_pipeline.data_loader.task_loader import Task, TaskLoader
 from reflect_pipeline.data_loader.rgbd_loader import VideoRgbdFrameProvider
 from reflect_pipeline.detector.GroundingDinoDetector import GroundingDinoDetector, DetectorConfig
@@ -23,7 +23,8 @@ from reflect_pipeline.models import (
 )
 
 __all__ = [
-    "run_task",
+    "run_episode",
+    "EpisodeInput",
     "Task",
     "TaskLoader",
     "VideoRgbdFrameProvider",
