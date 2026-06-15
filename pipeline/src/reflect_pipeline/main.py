@@ -3,7 +3,7 @@ from pathlib import Path
 
 from reflect_pipeline.data_loader.task_loader import TaskLoader
 from reflect_pipeline.detector.GroundingDinoDetector import GroundingDinoDetector, DetectorConfig
-from reflect_pipeline.run_pipeline import run_task
+from reflect_pipeline.run_pipeline import EpisodeInput, run_episode
 
 _EXAMPLE_DATA = Path(__file__).resolve().parents[3] / "example_data"
 
@@ -31,7 +31,7 @@ def main():
     for tid in task_ids:
         task = loader.get(tid)
         print(f"\n=== Task {tid}: {task.name} ({task.folder_name}) ===")
-        run_task(task, data_dir, detector)
+        run_episode(EpisodeInput.from_task(task), detector, out_dir=data_dir)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import itertools
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -342,9 +344,10 @@ def _sticky_dedupe_keep(
 
 
 def track_video_with_yoloe_redetect(
-    video_path: Path,
+    frames: Iterable[tuple[int, np.ndarray]],
     initial_detection_result: DetectionResult,
     output_path: Path,
+    fps: float = 30.0,
     provider=None,
     task=None,
     detection_runner=None,
@@ -432,15 +435,13 @@ def track_video_with_yoloe_redetect(
         # periodic redetect is handled by redetect_every_n_frames instead.
         validator = CompositeTrackingValidator(redetect_interval=10**9)
 
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
+    frames_iter = iter(frames)
+    try:
+        first_frame_id, ref_rgb = next(frames_iter)
+    except StopIteration:
+        raise RuntimeError("frames iterable is empty — cannot prime YOLOE.")
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
+    height, width = ref_rgb.shape[:2]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(
         str(output_path),
@@ -448,12 +449,7 @@ def track_video_with_yoloe_redetect(
         fps,
         (width, height),
     )
-
-    ret, ref_bgr = cap.read()
-    if not ret:
-        raise RuntimeError("Could not read reference frame 0.")
-
-    ref_rgb = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2RGB)
+    frames_to_process = itertools.chain([(first_frame_id, ref_rgb)], frames_iter)
 
     model, label_names = _prime_yoloe(
         model_name=model_name,
@@ -467,8 +463,6 @@ def track_video_with_yoloe_redetect(
     # (validator, writers, overlay) are fed appearance-stable ids instead.
     _stable = _StableIdAssigner()
     _seed_stable_ids(_stable, initial_detection_result, ref_rgb, dedupe_by_label)
-
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     expected_labels = set(label_names)
     lost_count = {lbl: 0 for lbl in expected_labels}
@@ -487,22 +481,17 @@ def track_video_with_yoloe_redetect(
     last_detection_frame = 0
 
     state = "TRACKING"
-    frame_idx = 0
     reset_tracker_next = True
     last_result = None
 
     try:
-        while True:
-            ret, frame_bgr = cap.read()
-            if not ret:
-                break
+        for frame_id, frame_rgb in frames_to_process:
+            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
-            if frame_idx % frame_step != 0:
+            if frame_id % frame_step != 0:
                 writer.write(frame_bgr)
-                frame_idx += 1
                 continue
 
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             drawn = frame_bgr.copy()
 
             if redetect_cooldown > 0:
@@ -514,8 +503,8 @@ def track_video_with_yoloe_redetect(
 
             if (
                 redetect_every_n_frames
-                and frame_idx > 0
-                and frame_idx % redetect_every_n_frames == 0
+                and frame_id > 0
+                and frame_id % redetect_every_n_frames == 0
             ):
                 trigger_redetect = True
                 redetect_reason = TriggerReason.FRAME_COUNTER_K
@@ -559,7 +548,7 @@ def track_video_with_yoloe_redetect(
                     redetect_on_invalid or validation_writer is not None
                 ):
                     depth = (
-                        _frame_depth_from_provider(provider, frame_idx)
+                        _frame_depth_from_provider(provider, frame_id)
                         if validate_with_depth
                         else None
                     )
@@ -586,7 +575,7 @@ def track_video_with_yoloe_redetect(
                 if validation_writer and vres is not None:
                     _write_validation_row(
                         result=result,
-                        frame_idx=frame_idx,
+                        frame_idx=frame_id,
                         fps=fps,
                         sequence_id=sequence_id,
                         label_names=label_names,
@@ -601,7 +590,7 @@ def track_video_with_yoloe_redetect(
                 if tracking_writer:
                     _write_jsonl_rows(
                         result=result,
-                        frame_idx=frame_idx,
+                        frame_idx=frame_id,
                         fps=fps,
                         sequence_id=sequence_id,
                         label_names=label_names,
@@ -644,12 +633,12 @@ def track_video_with_yoloe_redetect(
                     if not bits:
                         bits.append(redetect_reason.value)
                     print(
-                        f"[frame {frame_idx}] redetect ({'; '.join(bits)}). Running GDINO."
+                        f"[frame {frame_id}] redetect ({'; '.join(bits)}). Running GDINO."
                     )
                     state = "REDETECT"
 
             if state == "REDETECT":
-                frame_input = provider.get_frame(frame_idx)
+                frame_input = provider.get_frame(frame_id)
 
                 gdino_result = detection_runner.run(
                     frame_input,
@@ -677,7 +666,7 @@ def track_video_with_yoloe_redetect(
                     )
                     if rejected_labels:
                         print(
-                            f"[frame {frame_idx}] re-ID rejected "
+                            f"[frame {frame_id}] re-ID rejected "
                             f"{sorted(rejected_labels)} (does not match seed embedding)."
                         )
 
@@ -690,7 +679,7 @@ def track_video_with_yoloe_redetect(
 
                 if gdino_result.success and gdino_result.detections:
                     print(
-                        f"[frame {frame_idx}] GDINO recovered {sorted(recovered or found)}. "
+                        f"[frame {frame_id}] GDINO recovered {sorted(recovered or found)}. "
                         f"Re-priming YOLOE."
                     )
                     model, label_names = _prime_yoloe(
@@ -705,7 +694,7 @@ def track_video_with_yoloe_redetect(
                     reset_tracker_next = True
 
                     frames_since_prime = 0
-                    last_detection_frame = frame_idx
+                    last_detection_frame = frame_id
                     # Sticky dedup ids reference the old track numbering; drop
                     # them so the next frame re-picks per label.
                     _dedup_sticky_ids.clear()
@@ -714,7 +703,7 @@ def track_video_with_yoloe_redetect(
                 else:
                     if rejected_labels:
                         print(
-                            f"[frame {frame_idx}] no verified detections left after "
+                            f"[frame {frame_id}] no verified detections left after "
                             f"re-ID veto. Backing off {occlusion_wait_frames} frames."
                         )
                         drawn = _draw_status(
@@ -722,7 +711,7 @@ def track_video_with_yoloe_redetect(
                         )
                     elif missing_now:
                         print(
-                            f"[frame {frame_idx}] GDINO did not recover "
+                            f"[frame {frame_id}] GDINO did not recover "
                             f"{sorted(missing_now)}. Backing off {occlusion_wait_frames} frames."
                         )
                         drawn = _draw_status(
@@ -730,7 +719,7 @@ def track_video_with_yoloe_redetect(
                         )
                     else:
                         print(
-                            f"[frame {frame_idx}] GDINO returned no detections. "
+                            f"[frame {frame_id}] GDINO returned no detections. "
                             f"Backing off {occlusion_wait_frames} frames."
                         )
                         drawn = _draw_status(frame_bgr, "GDINO: no detections")
@@ -740,19 +729,16 @@ def track_video_with_yoloe_redetect(
 
             writer.write(drawn)
 
-            if frame_idx % 100 == 0:
+            if frame_id % 100 == 0:
                 n = 0
                 if last_result is not None and last_result.boxes is not None:
                     n = len(last_result.boxes)
                 print(
-                    f"[frame {frame_idx}/{n_frames}] state={state}, "
+                    f"[frame {frame_id}] state={state}, "
                     f"yoloe_boxes={n}, lost={ {k: v for k, v in lost_count.items() if v} }"
                 )
 
-            frame_idx += 1
-
     finally:
-        cap.release()
         writer.release()
 
     print(f"Saved tracked video → {output_path.resolve()}")
