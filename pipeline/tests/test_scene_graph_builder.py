@@ -18,17 +18,17 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.base import JsonlWriter
-from models.detection import (
+from reflect_pipeline.models.base import JsonlWriter
+from reflect_pipeline.models.detection import (
     Detection,
     DetectionFailureMode,
     DetectionFrame,
     TriggerReason,
 )
-from models.scene_graph import LocalizationFailureType, NodeStatus
-from models.tracking import TrackedObject, TrackerStatus, TrackingFlags, TrackingFrame
-from scene_graph.scene_graph_builder import SceneGraphBuilder, SceneGraphConfig
-from scene_graph.build_scene_graphs import assemble
+from reflect_pipeline.models.scene_graph import LocalizationFailureType, NodeStatus
+from reflect_pipeline.models.tracking import TrackedObject, TrackerStatus, TrackingFlags, TrackingFrame
+from reflect_pipeline.scene_graph.scene_graph_builder import SceneGraphBuilder, SceneGraphConfig
+from reflect_pipeline.scene_graph.build_scene_graphs import assemble
 
 
 def _obj(object_id, bbox, conf=0.9, ratio=1.0, disp=0.0):

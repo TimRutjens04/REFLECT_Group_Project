@@ -93,3 +93,6 @@ depth/
 data/
 example_data/
 demo/
+
+# Model checkpoints
+checkpoints/
