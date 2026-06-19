@@ -100,3 +100,5 @@ example_data/**
 
 # Extracted frames (large; regenerate with pipeline/scripts/extract_frames.py)
 example_data/real_data/*/frames/
+
+demo/
