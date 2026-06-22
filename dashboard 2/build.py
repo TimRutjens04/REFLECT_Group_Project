@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from collections import Counter
 from datetime import datetime, timezone
@@ -78,7 +79,7 @@ OLLAMA_MODEL    = "llama3.1:8b"
 OLLAMA_FALLBACK = "llama3:latest"   # used if the preferred model isn't installed
 LLM_TEMPERATURE = 0.1
 LLM_TIMEOUT_S   = 60
-PROMPT_VERSION  = "overview_v1.0"
+PROMPT_VERSION  = "overview_v2.3"
 LLM_CACHE_DIR   = DASH_DIR / ".llm_cache"
 
 
@@ -245,6 +246,87 @@ def _ids_set(rows: list[dict], extract) -> set:
             if oid:
                 s.add(oid)
     return s
+
+
+# Physically implausible scene-graph relations. Each rule is
+# (from_label_substring, relation, to_label_substring); the sentinel "*fruit*"
+# matches any fruit label. Used to flag scene-graph misclassifications in the
+# LLM input so the model treats them as errors, not real task state.
+_FRUITS = ("apple", "pear", "banana", "orange", "lemon", "peach", "mango", "grape", "fruit")
+# Only relations the scene graph actually emits (near, left_of, above,
+# on_top_of, inside) can ever fire here. Rules referencing relations the SG never
+# produces (e.g. held_by_gripper) are dead code and were removed — they only led
+# the LLM to hallucinate matching findings.
+_IMPLAUSIBLE_RULES = [
+    ("coffee machine", "inside",    "table"),
+    ("coffee cup",     "inside",    "table"),
+    ("drawer",         "inside",    "*fruit*"),
+    ("bowl",           "inside",    "*fruit*"),
+    ("fridge",         "inside",    "*fruit*"),
+    ("pot",            "inside",    "stove burner"),
+    ("fridge",         "inside",    "pot"),
+    ("coffee machine", "on_top_of", "coffee cup"),
+]
+
+
+def _label_matches(label: str, pat: str) -> bool:
+    if pat == "*fruit*":
+        return any(f in label for f in _FRUITS)
+    return pat in label
+
+
+def is_implausible_relation(from_label: str, relation: str, to_label: str) -> bool:
+    for fpat, rel, tpat in _IMPLAUSIBLE_RULES:
+        if relation == rel and _label_matches(from_label, fpat) and _label_matches(to_label, tpat):
+            return True
+    return False
+
+
+def _presence_flicker(frames) -> int:
+    """Number of disappear→reappear cycles: count gaps (>1 frame) in a presence set."""
+    fs = sorted(frames)
+    return sum(1 for a, b in zip(fs, fs[1:]) if b - a > 1)
+
+
+def _contiguous_ranges(frames, max_gap: int = 2) -> list:
+    """[1,2,3, 10,11,12] -> [[1,3],[10,12]]. Gaps <= max_gap join one range."""
+    if not frames:
+        return []
+    s = sorted(frames)
+    out = [[s[0], s[0]]]
+    for f in s[1:]:
+        if f - out[-1][1] <= max_gap + 1:
+            out[-1][1] = f
+        else:
+            out.append([f, f])
+    return out
+
+
+def _flag_bursts(fired_frames, gap: int = 4, min_span: int = 5) -> list:
+    """Contiguous ranges where a flag fires on >half the frames. Firing frames
+    within `gap` of each other join one cluster; clusters shorter than `min_span`
+    (single-event firings) are dropped."""
+    fs = sorted(set(fired_frames))
+    if not fs:
+        return []
+    clusters = []
+    start = prev = fs[0]
+    cnt = 1
+    for f in fs[1:]:
+        if f - prev <= gap:
+            prev = f
+            cnt += 1
+        else:
+            clusters.append((start, prev, cnt))
+            start = prev = f
+            cnt = 1
+    clusters.append((start, prev, cnt))
+    out = []
+    for s, e, c in clusters:
+        span = e - s + 1
+        if span >= min_span and c / span > 0.5:
+            out.append([s, e])
+    return out
 
 
 def build_data(repo: Path, seq_id: str) -> dict:
@@ -502,24 +584,28 @@ def build_data(repo: Path, seq_id: str) -> dict:
         "llm_overview": None,   # filled in main() after model selection
     }
 
-    # ---- LLM input summary (all floats rounded so the cache hash is stable) --
-    gt_win = gt.get("failure_window_frames") if gt else None
+    # ---- LLM input summary (GT-FREE; all floats rounded for a stable hash) ----
+    # This dict is the ONLY thing the LLM sees. It deliberately contains no ground
+    # truth — no failure_reason, no failure window, no success label — so the
+    # commentary describes pipeline signals only. GT still reaches the page via the
+    # separate top-level `gt` field (built in build_data and shown on the card).
 
     def conf_stats(oid):
         pts = tracker_conf.get(oid, [])
-        vals = sorted(p["y"] for p in pts)
-        if not vals:
+        if not pts:
             return None
-        p5 = _percentile(vals, 5)
-        low = [p["x"] for p in pts if p["y"] < p5]
-        in_gt = sum(1 for f in low if gt_win[0] <= f <= gt_win[1]) if gt_win else 0
+        vals = sorted(p["y"] for p in pts)
+        n = len(vals)
+        lowest_5_frames = sorted(p["x"] for p in sorted(pts, key=lambda q: q["y"])[:5])
         return {
-            "min": round(vals[0], 3), "p5": round(p5, 3),
-            "mean": round(sum(vals) / len(vals), 3),
-            "median": round(_percentile(vals, 50), 3),
+            "min": round(vals[0], 3),
+            "p5": round(_percentile(vals, 5), 3),
+            "mean": round(sum(vals) / n, 3),
+            "p95": round(_percentile(vals, 95), 3),
             "max": round(vals[-1], 3),
-            "low_conf_frames": len(low),
-            "low_conf_frames_in_gt": in_gt,
+            "frames_below_0_4": sum(1 for v in vals if v < 0.4),
+            "frames_below_0_6": sum(1 for v in vals if v < 0.6),
+            "lowest_5_frames": lowest_5_frames,
         }
 
     tracker_conf_stats = {}
@@ -528,8 +614,119 @@ def build_data(repo: Path, seq_id: str) -> dict:
         if s:
             tracker_conf_stats[oid] = s
 
-    # Cross-module mismatches over the tracker-namespace modules only. Detection
-    # uses its own detection-id namespace, so comparing it here would be noise.
+    # Per-object status counts come from the VALIDATION module (tracking's
+    # top-level status underreports drift/occlusion).
+    status_keys = ["ok", "drifting", "occluded", "lost", "recovered"]
+    val_status: dict[str, Counter] = {}
+    for r in validation:
+        for o in r.get("tracked_objects", []):
+            oid = o.get("object_id")
+            if oid:
+                val_status.setdefault(oid, Counter())[obj_status(o) or "ok"] += 1
+    tracker_status_summary = {
+        oid: {k: c.get(k, 0) for k in status_keys} for oid, c in val_status.items()
+    }
+
+    # Contiguous flag bursts (flag fires on most frames of the range).
+    drift_fired = [r["frame_id"] for r in tracking if r.get("flags", {}).get("drift_flag")]
+    recov_fired = [r["frame_id"] for r in tracking if r.get("flags", {}).get("any_recovery_trigger")]
+    depthjump_fired = [r["frame_id"] for r in depth
+                       if any(o.get("depth_jump_flag") for o in r.get("per_object_depth", []))]
+    flag_burst_ranges = {
+        "drift_flag": _flag_bursts(drift_fired),
+        "depth_jump_flag": _flag_bursts(depthjump_fired),
+        "any_recovery_trigger": _flag_bursts(recov_fired),
+    }
+
+    # Scene-graph summary: relation counts, transitions, implausible relations.
+    # Implausible edges are aggregated per specific (from_id, label, relation,
+    # to_id, label) so the LLM can cite exact ids and frames, not just labels.
+    relation_counts: Counter = Counter()
+    imp_frames: dict[tuple, set] = {}
+    for r in scene_graph:
+        fid = r["frame_id"]
+        nodes_by_id = {n.get("object_id"): n.get("label") for n in r.get("nodes", [])}
+        for e in r.get("edges", []):
+            rel = e.get("relation")
+            if not rel:
+                continue
+            relation_counts[rel] += 1
+            a, b = edge_endpoints(e)
+            if not a or not b:
+                continue
+            la = nodes_by_id.get(a) or a.rsplit("_", 1)[0]
+            lb = nodes_by_id.get(b) or b.rsplit("_", 1)[0]
+            if is_implausible_relation(la.lower(), rel, lb.lower()):
+                imp_frames.setdefault((a, la, rel, b, lb), set()).add(fid)
+    trans_counts: Counter = Counter()
+    for i in range(len(relation_strip) - 1):
+        fr, to = relation_strip[i]["relation"], relation_strip[i + 1]["relation"]
+        if fr and to:
+            trans_counts[(fr, to)] += 1
+
+    implausible_observed = []
+    for key, fset in sorted(imp_frames.items(), key=lambda kv: -len(kv[1])):
+        fids = sorted(fset)
+        ranges = _contiguous_ranges(fids, max_gap=2)
+        ranges_show = sorted(ranges, key=lambda rg: -(rg[1] - rg[0]))[:6]
+        entry = {
+            "from_id": key[0],
+            "from_label": key[1],
+            "relation": key[2],
+            "to_id": key[3],
+            "to_label": key[4],
+            "n_frames": len(fids),
+            "first_frame": fids[0],
+            "last_frame": fids[-1],
+            "frame_ranges": ranges_show,
+            "example_frames": fids[:5],
+        }
+        if len(ranges) > len(ranges_show):
+            entry["n_extra_ranges"] = len(ranges) - len(ranges_show)
+        implausible_observed.append(entry)
+
+    scene_graph_summary = {
+        "n_unique_relations": sorted(relation_counts.keys()),
+        "relation_counts": dict(relation_counts),
+        "relation_transitions": [
+            {"from": k[0], "to": k[1], "count": v}
+            for k, v in sorted(trans_counts.items(), key=lambda kv: -kv[1])
+        ],
+        "implausible_relations_observed": implausible_observed,
+    }
+    # Make the ABSENCE of implausible relations explicit, and tell the LLM which
+    # relation names actually exist in this sequence so it can't invent others.
+    scene_graph_summary["n_implausible_relations_observed"] = len(implausible_observed)
+    scene_graph_summary["relation_types_emitted_by_sg"] = sorted({
+        e.get("relation") for r in scene_graph for e in r.get("edges", []) if e.get("relation")
+    })
+
+    # Flicker: object presence gaps (tracking) and main-pair relation gaps.
+    track_presence: dict[str, set] = {}
+    for r in tracking:
+        fid = r["frame_id"]
+        for o in r.get("tracked_objects", []):
+            oid = o.get("object_id")
+            if oid:
+                track_presence.setdefault(oid, set()).add(fid)
+    object_flicker = {oid: _presence_flicker(fr) for oid, fr in track_presence.items()}
+    main_rel_frames: dict[str, set] = {}
+    for r in scene_graph:
+        fid = r["frame_id"]
+        for e in r.get("edges", []):
+            a, b = edge_endpoints(e)
+            rel = e.get("relation")
+            if rel and a in main_set and b in main_set and {a, b} == main_set:
+                main_rel_frames.setdefault(rel, set()).add(fid)
+    relation_flicker = {}
+    if len(main_objs) >= 2:
+        oa, ob = main_objs[0], main_objs[1]
+        for rel, fr in main_rel_frames.items():
+            relation_flicker[f"{oa}|{ob}|{rel}"] = _presence_flicker(fr)
+    flicker_summary = {"objects": object_flicker, "relations": relation_flicker}
+
+    # Cross-module mismatches over the tracker-namespace modules only (detection
+    # uses its own detection-id namespace, so comparing it here would be noise).
     ns_mods = {m: _ids_set(rows_by_mod[m], extractors[m])
                for m in ("tracking", "depth", "scene_graph", "validation") if rows_by_mod[m]}
     all_ns_ids = set().union(*ns_mods.values()) if ns_mods else set()
@@ -538,8 +735,8 @@ def build_data(repo: Path, seq_id: str) -> dict:
         missing = [m for m in ns_mods if oid not in ns_mods[m]]
         if missing:
             mismatches.append({
-                "object_id": oid,
-                "present_in": [m for m in ns_mods if oid in ns_mods[m]],
+                "oid": oid,
+                "in_modules": [m for m in ns_mods if oid in ns_mods[m]],
                 "missing_from": missing,
             })
 
@@ -550,25 +747,63 @@ def build_data(repo: Path, seq_id: str) -> dict:
             bo_ranges[-1][1] = f
         else:
             bo_ranges.append([f, f])
+    longest_burst = max(bo_ranges, key=lambda r: r[1] - r[0], default=None)
+
+    llm_dino = {
+        "n_runs": n_runs,
+        "trigger_reasons": dict(reasons),
+        "meaningful_recovery_rate": recovery_rate,
+        "n_routine_timeouts": reasons.get("frame_counter_K", 0),
+    }
+    llm_inventory = {m: object_inventory[m]
+                     for m in ("detection", "tracking", "scene_graph", "validation")
+                     if m in object_inventory}
 
     llm_input = {
         "sequence_id": seq_id,
-        "task_name": gt.get("task_name") if gt else None,
-        "fps": fps,
+        "task_name": gt.get("task_name") if gt else None,   # task description only — no failure info
         "n_frames": n_frames,
+        "fps": fps,
         "duration_s": total_seconds,
-        "gt": None if not gt else {
-            "failure_reason": gt.get("failure_reason"),
-            "failure_window_s": gt.get("failure_window_s"),
-            "failure_window_frames": gt.get("failure_window_frames"),
-            "success_condition": gt.get("success_condition"),
-        },
-        "dino": dino_stats,
-        "object_inventory": object_inventory,
+        "dino": llm_dino,
+        "object_inventory": llm_inventory,
         "tracker_confidence_stats": tracker_conf_stats,
+        "tracker_status_summary": tracker_status_summary,
+        "flag_burst_ranges": flag_burst_ranges,
+        "scene_graph_summary": scene_graph_summary,
+        "flicker_summary": flicker_summary,
         "cross_module_mismatches": mismatches,
-        "blackout_frames": {"count": len(blackout), "ranges": bo_ranges[:25]},
+        "blackout_summary": {
+            "total_empty_frames": len(blackout),
+            "longest_burst_frames": longest_burst if longest_burst else [],
+        },
     }
+
+    # ---- Object-presence ranges for the timeline Gantt (honest segments) -----
+    # Reuse track_presence (oid -> set of frames). max_gap=1 keeps presence
+    # exact-ish (bridges only single dropped frames). Ordered by n_frames desc so
+    # the front-end can take the first 6 keys without re-sorting.
+    object_presence_ranges = {}
+    for oid, fset in sorted(track_presence.items(), key=lambda kv: -len(kv[1])):
+        fids = sorted(fset)
+        object_presence_ranges[oid] = {
+            "label": oid.rsplit("_", 1)[0],
+            "n_frames": len(fids),
+            "ranges": _contiguous_ranges(fids, max_gap=1),
+        }
+
+    # ---- Per-frame scene-graph edges for the live "Relations" chip row -------
+    edges_by_frame: dict[int, list] = {}
+    for r in scene_graph:
+        fid = r["frame_id"]
+        items = []
+        for e in r.get("edges", []):
+            a, b = edge_endpoints(e)
+            rel = e.get("relation")
+            if a and b and rel:
+                items.append({"from_id": a, "relation": rel, "to_id": b})
+        if items:
+            edges_by_frame[fid] = items
 
     return {
         "sequence_id": seq_id,
@@ -589,6 +824,8 @@ def build_data(repo: Path, seq_id: str) -> dict:
         "drifting_frames": sorted(drifting_frames),
         "bbox_by_frame": {"tracker": bbox_tracker, "detector": bbox_detector},
         "sg_by_frame": sg_by_frame,
+        "object_presence_ranges": object_presence_ranges,
+        "edges_by_frame": edges_by_frame,
         "video_dims": video_dims,
         "available": {
             "depth": bool(depth),
@@ -665,46 +902,232 @@ def stage_videos(repo: Path, sequences: list[str]) -> None:
 # LLM commentary (Ollama) for the overview page — build-time only, cached
 # --------------------------------------------------------------------------- #
 SYSTEM_PROMPT = """\
+## Role
+
 You are reviewing a single robot perception sequence. The pipeline runs Grounding DINO
 for object detection, a single-object tracker propagating between detections, a depth
-consistency module, a scene-graph builder, and a validation module. You will be given
-a structured summary of one sequence's pipeline behavior. Produce a concise overview
-that helps a human reviewer understand at a glance what happened in this sequence.
+consistency module, a scene-graph builder, and a validation module. Your job is to
+produce a concise overview describing what the dashboard observed in this sequence.
 
-GLOSSARY
-- DINO recovery rate: fraction of DINO calls triggered by something other than the
-  routine 30-frame timeout (frame_counter_K). High = the tracker frequently asked for
-  re-detection because it was struggling.
-- Unique object IDs: number of distinct object identities each module emitted for a
-  given label across the full sequence. Multiple unique IDs for the same physical
-  object indicate identity instability.
-- GT failure window: the ground-truth-annotated frame range where the task is
-  considered to have failed.
-- tracker_confidence: 0 to 1 score per (frame, object); lower values mean less reliable
-  tracking.
-- Cross-module mismatch: an object_id present in one module's log but not another's.
+IMPORTANT: The dashboard's purpose is to DETECT potential pipeline or task failures
+on its own, from the signals available in the pipeline logs. You will not be given
+ground-truth task-failure labels. Your commentary must describe what the pipeline
+signals indicate, not what "actually happened" externally. Do not claim a task
+succeeded or failed. Describe what the data shows; let the reader judge.
 
-INSTRUCTIONS
-- Output ONLY valid JSON in this exact shape:
-  {
-    "summary": "...",
-    "highlights": [
-      {"text": "...", "severity": "info" | "warning" | "alert"}
-    ]
-  }
-- Maximum 6 highlights. Prefer 4-5 substantive ones over a long list of generic ones.
-- Severity rules:
-  - "alert" = the claim references the GT failure window, OR describes a clear pipeline
-    failure (an object_id in one module that isn't in another, a flag firing at a
-    frame inside the GT window, etc.).
-  - "warning" = a value is past P95 or below P5 of its distribution, OR a cross-module
-    disagreement that isn't necessarily a failure but is worth flagging.
-  - "info" = stable, descriptive observations.
-- Reference specific frame numbers, object_ids, and metric values from the input.
-  Do not invent values that are not present in the input.
-- Do not add any text outside the JSON.
-- If you cannot find enough material for a highlight, leave the list shorter rather
-  than padding with generic observations.
+## Glossary
+
+- tracker_confidence: 0 to 1 score per (frame, object); lower values mean less
+  reliable tracking.
+- tracker_status: ok | drifting | occluded | lost | recovered. The validation
+  module reports per-object status that can disagree with the tracker's own
+  top-level reporting.
+- bbox_size_change_flag: fires when the tracked box area changes sharply versus
+  its initialization size — sometimes a sign that the tracker locked onto a
+  different region.
+- drift_flag: fires when pixel displacement exceeds a threshold over consecutive
+  frames.
+- recovery_trigger: the tracker asked the pipeline to re-run detection.
+- frame_counter_K_flag: a ROUTINE 30-frame timeout that fires regardless of
+  tracker state. It is NOT a sign of trouble.
+- depth_jump_flag, depth_coherence_flag, depth_validity_flag, any_depth_trigger:
+  per-frame, per-object depth-module signals.
+- Scene graph: builds a per-frame graph of which objects are near/inside/on top
+  of/left of/above each other. The relations are derived from 3D positions and
+  bbox geometry.
+- Cross-module mismatch: an object_id present in one module's log but missing
+  from another's.
+- Flicker: an object or relation that disappears and reappears across frames.
+
+## Domain knowledge — apply this when forming highlights
+
+### Grounding DINO cadence
+
+DINO runs automatically every 30 frames via the routine timeout
+(frame_counter_K_flag). When computing or commenting on the "DINO recovery rate,"
+EXCLUDE these routine calls — they do not indicate the tracker was struggling.
+The meaningful re-detections are those triggered by tracker_low_confidence,
+bbox_size_change, drift, or depth_jump.
+
+### Tracker confidence drops
+
+A confidence drop is NOT automatic evidence of pipeline failure. Common benign
+causes in this dataset include:
+- The object is moving and the robot's gripper is interacting with it.
+- The object is partially or fully occluded by the robot's hand.
+
+Use cautious language. Say "this could indicate" or "this might suggest occlusion
+or interaction" rather than "the tracker failed."
+
+### Scene-graph behavior
+
+The scene graph is the only module that can structurally signal what is happening
+in the task. For example, in a "put apple in bowl" task, edges like
+"apple on_top_of bowl" or "apple inside bowl" indicate the placement state.
+
+HOWEVER, the scene graph can produce implausible relations. Treat the following
+patterns as scene-graph errors, not as real task state. Flag them in the
+commentary as "the scene graph reports an implausible relation" rather than as
+a real event:
+
+- Coffee Machine is inside the table.
+- Coffee cup is inside the table.
+- Drawer is inside any fruit.
+- Bowl is inside any fruit.
+- Fridge is inside any fruit.
+- Pot is inside the stove burner.
+- Fridge is inside the pot.
+- Coffee machine is on top of the coffee cup.
+
+These are physically implausible and indicate a scene-graph misclassification.
+
+HARD RULE — DO NOT FABRICATE IMPLAUSIBLE-RELATION FINDINGS.
+
+You will ONLY raise an implausible-relation highlight if the input's
+`scene_graph_summary.implausible_relations_observed` list contains a matching
+entry for that exact (from_id, relation, to_id) combination. The build script
+has already pre-checked every scene-graph edge against the implausible-pattern
+list above; if a relation is not in `implausible_relations_observed`, then by
+definition it is NOT implausible in this sequence, regardless of how the
+labels sound to you.
+
+If `scene_graph_summary.n_implausible_relations_observed` is 0, do not produce
+ANY implausible-relation highlight, do not paraphrase the implausible-pattern
+list, and do not flag any relation as a scene-graph error. The patterns above
+exist so you know what to call out IF the input contains them; they are not a
+list of findings to manufacture.
+
+The scene graph emits these spatial relation types: near, left_of, above,
+on_top_of, inside. It may also emit `held_by_gripper` (the robot gripper
+holding an object) — this is a NORMAL relation and is NEVER implausible by
+itself; the robot routinely holds the object it is manipulating. Use only
+relation names that appear in the input's `relation_types_emitted_by_sg`
+list; do not invent others.
+
+Normal relations like `near`, `left_of`, `above`, and `held_by_gripper`
+between sensibly-paired objects are NOT implausible. Only the specific
+patterns listed above count as implausible, and only when present in the
+input's implausible_relations_observed list.
+
+When you raise a highlight about an implausible scene-graph relation, you MUST
+cite all of the following from the input data:
+- The exact relation type ("inside", "on_top_of", "above", "near", "left_of").
+- The specific object_ids involved (use `from_id` and `to_id` from the input,
+  not just labels — IDs are more precise and tell the reader which instance
+  was affected).
+- A specific frame reference: either a single frame range like "frames 100-105"
+  taken from `frame_ranges`, or "frames 100, 102, 310" taken from
+  `example_frames`, or the inclusive interval `first_frame`-`last_frame`.
+- The total `n_frames` the relation persisted for.
+
+Generic phrasing like "at certain points" or "between the drawer and the
+gripper" is not acceptable when the input contains the specific values.
+
+Use this template for implausible-relation highlights:
+"The scene graph reports {from_id} as '{relation}' {to_id} across frames
+{range_text} ({n_frames} frames total). This is physically implausible and
+likely indicates a scene-graph misclassification rather than a real event."
+
+If multiple implausible relations are present, raise each as its own
+highlight rather than rolling them into one. Severity for these is "alert".
+
+### Flicker thresholds
+
+- 2-3 flickers of an object or relation across the sequence is usually
+  occlusion (robot hand briefly blocks the view). Generally benign — do not
+  raise to alert severity.
+- MORE than 3 flickers of a single object or relation is worth commenting on
+  as possible instability — phrase it as "this could indicate" rather than
+  asserting a failure.
+
+### Tone
+
+Use cautious, exploratory language throughout: "this could suggest," "this
+might indicate," "worth investigating," "the data shows." Avoid definitive
+verdicts: "the task failed," "the tracker is broken," "the pipeline did not
+work." The dashboard surfaces possible issues; it does not declare verdicts.
+
+## Reference frames — calibration for healthy vs concerning state
+
+When evaluating per-object statistics in the input, use these two reference
+states as calibration points.
+
+### Healthy state (what stable mid-task tracking looks like)
+
+- Multiple objects tracked simultaneously, each with tracker_confidence well
+  above 0.9.
+- All tracker_status values are "ok"; no flags fired this frame.
+- Depth medians per object are stable across recent frames (small frame-to-frame
+  change).
+- Scene graph has an edge between the relevant objects (e.g., "near"), and that
+  edge has been consistent for many frames.
+- bbox_area_ratio_to_init is close to 1.0 for each tracked object.
+
+### Concerning state (what degradation looks like)
+
+- Only one object tracked when two or more were tracked moments ago — the
+  pipeline lost an object.
+- tracker_confidence has dropped below 0.4 for at least one object.
+- tracker_status is "drifting" while bbox_size_change_flag and recovery_trigger
+  are both true.
+- bbox_area_ratio_to_init has dropped well below 0.8 (the bbox shrank
+  significantly).
+- Depth median has shifted sharply (more than ~0.2m) from its recent value.
+- Scene graph has lost the relation between the relevant objects, or no edges
+  exist at all.
+
+You will not see raw per-frame data — you will see aggregated statistics. Use
+the reference states as the standard for interpreting whether the aggregates
+look healthy or concerning.
+
+## Output schema
+
+Output ONLY valid JSON in this exact shape. No text outside the JSON.
+
+{
+  "summary": "2-3 sentence headline overview, plain English, cautious tone.",
+  "highlights": [
+    {
+      "text": "Specific finding referencing concrete values or counts from the input.",
+      "severity": "info" | "warning" | "alert"
+    }
+  ]
+}
+
+Maximum 6 highlights. Prefer 4-5 substantive ones over a long list of generic
+ones. Every highlight must reference at least one of: a specific object_id, a
+specific numeric value from the input, or a specific frame_id (or frame
+range). Each cited value must appear LITERALLY in the input data — do not
+infer, paraphrase, or round values that aren't present. For
+implausible-relation highlights, all of these are required: object_ids,
+relation type from the five allowed names, and frame range — AND the entry
+must exist in `scene_graph_summary.implausible_relations_observed`.
+
+If you cannot find a value in the input that supports a claim, do not include
+the highlight. It is better to produce fewer highlights than to invent
+specifics.
+
+## Severity rules
+
+Severity is based ENTIRELY on what the pipeline signals indicate. Do not
+reference any GT, failure-window, or task-success information. You will not
+receive any such information in the input.
+
+- "alert" = a clear pipeline anomaly, including:
+    * a tracked object's minimum confidence below 0.4;
+    * a sustained drifting/occluded/lost status reported by validation;
+    * an implausible scene-graph relation from the list above;
+    * a cross-module identity mismatch (object_id in one module, missing from
+      another);
+    * extended periods (more than ~15 frames) where the pipeline emitted zero
+      tracked objects.
+- "warning" = unusual but possibly normal, including:
+    * minimum confidence between 0.4 and 0.6 (could indicate occlusion);
+    * 4-10 flickers of an object or relation;
+    * depth_jump_flag firing more than a handful of times;
+    * meaningful bbox_size_change events.
+- "info" = stable, descriptive observations the reader should know but that
+  do not indicate any concern.
 """
 
 
@@ -800,6 +1223,20 @@ def _call_ollama(model: str, summary: dict) -> dict | None:
             highlights.append({"text": text.strip(), "severity": sev})
         if len(highlights) >= 6:
             break
+
+    # Deterministic backstop: the build already pre-checked every edge, so if the
+    # input flagged ZERO implausible relations, any highlight that nonetheless
+    # asserts implausibility is a hallucination — drop it. (When real implausible
+    # relations exist, highlights are kept and the prompt template governs them.)
+    imp = (summary.get("scene_graph_summary") or {}).get("implausible_relations_observed") or []
+    if not imp:
+        fabricated = re.compile(r"implausib|misclassif|physically impossible|scene[- ]?graph error", re.I)
+        kept = [h for h in highlights if not fabricated.search(h["text"])]
+        if len(kept) != len(highlights):
+            print(f"      (dropped {len(highlights) - len(kept)} fabricated "
+                  f"implausible-relation highlight(s) — input flagged none)")
+        highlights = kept
+
     return {"summary": summary_txt.strip(), "highlights": highlights}
 
 
@@ -819,9 +1256,11 @@ def get_llm_overview(model: str | None, seq_id: str, summary: dict) -> dict:
     if model is None:
         return _placeholder_llm(input_hash)
     print(f"  · calling Ollama for {seq_id} (model '{model}')...")
+    t0 = datetime.now()
     result = _call_ollama(model, summary)
+    elapsed = (datetime.now() - t0).total_seconds()
     if result is None:
-        print(f"      → call failed; rendering 'unavailable' for {seq_id}")
+        print(f"      → call failed after {elapsed:.1f}s; rendering 'unavailable' for {seq_id}")
         return _placeholder_llm(input_hash)
     llm = {
         "summary": result["summary"],
@@ -834,7 +1273,7 @@ def get_llm_overview(model: str | None, seq_id: str, summary: dict) -> dict:
         },
     }
     cache_path.write_text(json.dumps(llm, indent=2), encoding="utf-8")
-    print(f"      → wrote new commentary to cache ({cache_path.name})")
+    print(f"      → generated in {elapsed:.1f}s; wrote to cache ({cache_path.name})")
     return llm
 
 
@@ -851,14 +1290,59 @@ def ensure_gitignore() -> None:
 # --------------------------------------------------------------------------- #
 # HTML assembly
 # --------------------------------------------------------------------------- #
-def render_html(payload: dict) -> str:
-    payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return HTML_TEMPLATE.replace("/*__DATA_JSON__*/null", payload_json)
+def _slice(s: str, start: str, end: str) -> str:
+    return s.split(start, 1)[1].split(end, 1)[0]
 
 
-def render_overview_html(payload: dict) -> str:
+def _extract_index_parts() -> tuple[str, str, str]:
+    """(css, content-markup, iife-js) from the single-page timeline template.
+    content-markup is everything after </header> up to the first <script>; the
+    IIFE is the second <script> (the first only declares PAYLOAD)."""
+    css = _slice(HTML_TEMPLATE, "<style>", "</style>")
+    after_head = HTML_TEMPLATE.split("</head>", 1)[1]
+    content = after_head.split("</header>", 1)[1].split("<script>", 1)[0]
+    js = (HTML_TEMPLATE.split("const PAYLOAD = /*__DATA_JSON__*/null;", 1)[1]
+          .split("<script>", 1)[1].rsplit("</script>", 1)[0])
+    return css, content, js
+
+
+def _extract_overview_parts() -> tuple[str, str, str]:
+    """(css, cards-markup, iife-js) from the overview template; the ov-header
+    (its own dropdown) is dropped — only the four cards are kept."""
+    css = _slice(OVERVIEW_TEMPLATE, "<style>", "</style>")
+    cards = ('<div class="overview-body"'
+             + OVERVIEW_TEMPLATE.split('<div class="overview-body"', 1)[1].split("<script>", 1)[0])
+    js = (OVERVIEW_TEMPLATE.split("const PAYLOAD = /*__DATA_JSON__*/null;", 1)[1]
+          .split("<script>", 1)[1].rsplit("</script>", 1)[0])
+    return css, cards, js
+
+
+def build_merged_template() -> str:
+    """Assemble ONE tabbed page from the two templates: shared CSS (index +
+    overview + chrome), one global header, Overview/Timeline panels, and the two
+    IIFEs plus a tab coordinator. The /*__DATA_JSON__*/null token appears once."""
+    idx_css, idx_content, idx_js = _extract_index_parts()
+    ov_css, ov_cards, ov_js = _extract_overview_parts()
+    return (
+        MERGED_HEAD
+        + idx_css + "\n" + ov_css + "\n" + MERGE_CSS
+        + "</style>\n</head>\n<body class=\"tab-overview\">\n"
+        + GLOBAL_HEADER
+        + '<div class="tab-panels">\n'
+        + '<div class="tab-panel" id="overview-panel">\n' + ov_cards + "</div>\n"
+        + '<div class="tab-panel" id="timeline-panel">\n' + idx_content + "</div>\n"
+        + "</div>\n"
+        + "<script>\nconst PAYLOAD = /*__DATA_JSON__*/null;\n</script>\n"
+        + "<script>\n" + idx_js + "\n</script>\n"
+        + "<script>\n" + ov_js + "\n</script>\n"
+        + "<script>\n" + COORDINATOR_JS + "\n</script>\n"
+        + "</body>\n</html>\n"
+    )
+
+
+def render_merged(payload: dict) -> str:
     payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return OVERVIEW_TEMPLATE.replace("/*__DATA_JSON__*/null", payload_json)
+    return build_merged_template().replace("/*__DATA_JSON__*/null", payload_json)
 
 
 def main() -> None:
@@ -908,17 +1392,13 @@ def main() -> None:
               f"detector {len(bbf['detector'])} frames/{det_boxes} boxes; "
               f"video_dims {d['video_dims']['width']}x{d['video_dims']['height']}")
 
-    # index.html keeps its original payload shape — strip the overview-only keys
-    # so the live dashboard isn't bloated with commentary it never reads.
-    index_payload = {k: v for k, v in payload.items() if k != "llm_preferred_model"}
-    index_payload["sequences"] = {
-        sid: {k: v for k, v in d.items() if k != "overview"}
-        for sid, d in payload["sequences"].items()
-    }
-    HTML_OUT.write_text(render_html(index_payload), encoding="utf-8")
+    # One combined tabbed page (Overview + Timeline). The single PAYLOAD carries
+    # everything both tabs need, so no per-file stripping.
+    HTML_OUT.write_text(render_merged(payload), encoding="utf-8")
     print(f"  wrote {HTML_OUT}")
-    OVERVIEW_OUT.write_text(render_overview_html(payload), encoding="utf-8")
-    print(f"  wrote {OVERVIEW_OUT}")
+    if OVERVIEW_OUT.exists():
+        OVERVIEW_OUT.unlink()
+        print(f"  removed stale {OVERVIEW_OUT}")
 
     ensure_gitignore()
 
@@ -959,7 +1439,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     height: 100vh;
     overflow: hidden;
     display: grid;
-    grid-template-rows: 50px minmax(260px, 2.3fr) 1.15fr 1.15fr 84px;
+    grid-template-rows: 50px minmax(240px, 2.3fr) 1.15fr 1.15fr 108px;
     gap: 7px;
     padding: 7px 9px;
   }
@@ -1097,6 +1577,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .obj-chip.entering, .obj-chip.exiting { opacity: 0; transform: scale(0.85); }
   .obj-chip.phantom { border-style: dashed; }
 
+  /* relation chip-chains: [object] (relation) [object], stacked one per row */
+  .rel-chain {
+    display: inline-flex; align-items: center; gap: 6px; margin: 2px 0; flex: 0 0 100%;
+    transition: opacity 180ms ease, transform 180ms ease;
+  }
+  .rel-chain.entering, .rel-chain.exiting { opacity: 0; transform: scale(0.96); }
+  .rel-chain .obj-chip { margin: 0; transition: none; }
+  .rel-chip {
+    padding: 1px 7px; border-radius: 10px; font-size: 11px; font-style: italic;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    white-space: nowrap; line-height: 1.4;
+  }
+  .rel-more { flex: 0 0 100%; color: var(--muted); font-size: 10.5px; padding: 2px 4px; }
+
   /* ---------- Chart panels ---------- */
   .panel {
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
@@ -1132,14 +1626,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     pointer-events: none; z-index: 5; will-change: transform;
   }
 
-  /* relation strip */
-  .strip-host { position: absolute; inset: 0; }
-  .strip-legend {
-    position: absolute; bottom: 3px; left: 12px; right: 10px; z-index: 3;
-    display: flex; flex-wrap: wrap; gap: 10px; font-size: 10px; pointer-events: none;
+  /* object-presence Gantt */
+  .gantt-host { position: absolute; left: 0; right: 0; top: 18px; bottom: 14px; }
+  .gantt-caption {
+    position: absolute; bottom: 2px; left: 12px; right: 10px; z-index: 3;
+    color: var(--muted); font-size: 10px; pointer-events: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .strip-legend span { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
-  .strip-legend i { width: 11px; height: 9px; border-radius: 2px; display: inline-block; }
 </style>
 </head>
 <body>
@@ -1184,6 +1677,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <span class="obj-row-label">Scene graph (<b id="sg-count">0</b>)</span>
           <span class="obj-chips" id="sg-chips"></span>
         </div>
+        <div class="obj-row">
+          <span class="obj-row-label">Relations (<b id="rel-count">0</b>)</span>
+          <span class="obj-chips" id="rel-chips"></span>
+        </div>
       </div>
     </div>
   </div>
@@ -1204,11 +1701,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="playhead" id="ph-depth"></div>
 </div>
 
-<div class="panel" id="panel-strip">
-  <div class="panel-ttl" id="strip-ttl">Scene-graph relation</div>
-  <div class="strip-host"><canvas id="stripCanvas"></canvas></div>
-  <div class="strip-legend" id="strip-legend"></div>
-  <div class="panel-msg" id="strip-msg">Scene graph not available for this sequence.</div>
+<div class="panel" id="panel-gantt">
+  <div class="panel-ttl">Object presence</div>
+  <div class="gantt-host"><canvas id="gantt-canvas"></canvas></div>
+  <div class="gantt-caption" id="gantt-caption"></div>
+  <div class="panel-msg" id="gantt-msg">No tracked objects.</div>
   <div class="playhead" id="ph-strip"></div>
 </div>
 
@@ -1263,8 +1760,8 @@ const PAYLOAD = /*__DATA_JSON__*/null;
 
   // ---- DOM refs ----
   const video = $("video");
-  const stripCanvas = $("stripCanvas");
-  const stripCtx = stripCanvas.getContext("2d");
+  const ganttCanvas = $("gantt-canvas");
+  const ganttCtx = ganttCanvas.getContext("2d");
   const phConf = $("ph-conf"), phDepth = $("ph-depth"), phStrip = $("ph-strip");
   const bboxCanvas = $("bbox-overlay");
   const bboxCtx = bboxCanvas.getContext("2d");
@@ -1455,46 +1952,70 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     ]);
   }
 
-  // ---- relation strip (own canvas) ----
-  function drawStrip() {
-    const host = stripCanvas.parentElement;
+  // ---- object-presence Gantt (drawn once per sequence; playhead sweeps it) ----
+  function shortId(oid) {
+    const m = String(oid).match(/^(.*)_(\d+)$/);
+    return m ? (m[1].split(/\s+/).pop() + "_" + m[2]) : String(oid);
+  }
+  function drawGantt() {
+    const host = ganttCanvas.parentElement;
     const cssW = host.clientWidth, cssH = host.clientHeight;
     const dpr = window.devicePixelRatio || 1;
-    stripCanvas.width = cssW * dpr;
-    stripCanvas.height = cssH * dpr;
-    stripCanvas.style.width = cssW + "px";
-    stripCanvas.style.height = cssH + "px";
-    stripCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    stripCtx.clearRect(0, 0, cssW, cssH);
+    ganttCanvas.width = cssW * dpr;
+    ganttCanvas.height = cssH * dpr;
+    ganttCanvas.style.width = cssW + "px";
+    ganttCanvas.style.height = cssH + "px";
+    const ctx = ganttCtx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    if (!CURRENT) return;
 
-    const left = plotLeft();
-    const right = cssW - 14;
-    const width = right - left;
-    const topPad = 22, botPad = 18;
-    const top = topPad, h = cssH - topPad - botPad;
-    if (width <= 0 || h <= 0) return;
+    const opr = CURRENT.object_presence_ranges || {};
+    const allIds = Object.keys(opr);
+    $("gantt-msg").classList.toggle("show", allIds.length === 0);
+    const ids = allIds.slice(0, 6);
 
-    if (gtFrames) {
-      const gx0 = left + (gtFrames[0] / MAXF) * width;
-      const gx1 = left + (gtFrames[1] / MAXF) * width;
-      stripCtx.fillStyle = "rgba(214,39,40,0.10)";
-      stripCtx.fillRect(gx0, top, gx1 - gx0, h);
+    // Align the plot area with the line charts so the shared playhead lines up.
+    const left = geom.left || Y_AXIS_W;
+    const width = geom.width > 0 ? geom.width : (cssW - left - 14);
+    const axisH = 13;
+    const areaH = cssH - axisH;
+    if (width <= 0 || areaH <= 0) return;
+    const rowH = areaH / Math.max(ids.length, 1);
+
+    for (let i = 0; i < ids.length; i++) {
+      const obj = opr[ids[i]];
+      const color = resolveColor(obj.label, i);
+      const y = i * rowH + 1.5;
+      const h = Math.max(4, rowH - 3);
+      // id label in the left gutter (same width as the charts' y-axis)
+      ctx.fillStyle = color;
+      ctx.font = "9px ui-monospace, Menlo, monospace";
+      ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      ctx.fillText(shortId(ids[i]), 3, y + h / 2);
+      // faint full-width track, then honest presence segments (gaps = unseen)
+      ctx.fillStyle = "rgba(255,255,255,0.05)";
+      ctx.fillRect(left, y, width, h);
+      ctx.fillStyle = color;
+      for (const seg of obj.ranges) {
+        const x0 = left + (seg[0] / MAXF) * width;
+        const x1 = left + (seg[1] / MAXF) * width;
+        ctx.fillRect(x0, y, Math.max(1, x1 - x0), h);
+      }
     }
-    for (const b of (CURRENT.relation_strip || [])) {
-      const x0 = left + (b.from / MAXF) * width;
-      const x1 = left + (b.to / MAXF) * width;
-      stripCtx.fillStyle = (b.relation && RELCOL[b.relation]) ? RELCOL[b.relation] : "rgba(255,255,255,0.05)";
-      stripCtx.fillRect(x0, top, Math.max(1, x1 - x0), h);
+
+    // x-axis frame labels at 0/25/50/75/100%
+    ctx.fillStyle = "#8b98a5";
+    ctx.font = "9px -apple-system, sans-serif";
+    ctx.textBaseline = "bottom"; ctx.textAlign = "center";
+    for (let p = 0; p <= 1.0; p += 0.25) {
+      ctx.fillText(String(Math.round(p * MAXF)), left + p * width, cssH - 2);
     }
-    stripCtx.fillStyle = "#8b98a5";
-    stripCtx.font = "10px -apple-system, sans-serif";
-    stripCtx.textAlign = "center";
-    const nTicks = 10;
-    for (let i = 0; i <= nTicks; i++) {
-      const f = Math.round((MAXF * i) / nTicks);
-      const x = left + (f / MAXF) * width;
-      stripCtx.fillText(String(f), x, cssH - 6);
-    }
+
+    let cap = "Object presence over time (top 6 by total frames tracked). " +
+      "Gaps = frames where the tracker did not see this object.";
+    if (allIds.length > ids.length) cap += " · " + (allIds.length - ids.length) + " more not shown.";
+    $("gantt-caption").textContent = cap;
   }
 
   // ---- shared plot geometry ----
@@ -1684,8 +2205,8 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     $(countId).textContent = desired.size;
   }
   function clearChips() {
-    $("trk-chips").innerHTML = ""; $("sg-chips").innerHTML = "";
-    $("trk-count").textContent = "0"; $("sg-count").textContent = "0";
+    $("trk-chips").innerHTML = ""; $("sg-chips").innerHTML = ""; $("rel-chips").innerHTML = "";
+    $("trk-count").textContent = "0"; $("sg-count").textContent = "0"; $("rel-count").textContent = "0";
   }
   function updateObjChips(f) {
     if (!CURRENT) return;
@@ -1695,6 +2216,76 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     diffChips("trk-chips", "trk-count", trkList);
     diffChips("sg-chips", "sg-count", sgList);
   }
+
+  // ---- Relations chip-chains: [from] (relation) [to], animated per chain ----
+  const REL_CHIP_COLORS = {
+    near:      { bg: "rgba(148,103,189,0.12)", fg: "#5b3b8c" },
+    left_of:   { bg: "rgba(127,127,127,0.12)", fg: "#444"    },
+    above:     { bg: "rgba(188,189,34,0.16)",  fg: "#7a7c12" },
+    on_top_of: { bg: "rgba(227,119,194,0.14)", fg: "#9a3a7e" },
+    inside:    { bg: "rgba(255,127,14,0.14)",  fg: "#9a4b07" },
+  };
+  const REL_MAX_CHAINS = 4;
+  function makeRelObjChip(oid) {
+    const c = chipColor(oid);
+    const el = document.createElement("div");
+    el.className = "obj-chip" + (isPhantom(oid) ? " phantom" : "");
+    el.textContent = oid;
+    el.style.color = c;
+    el.style.background = hexToRgba(c, 0.12);
+    return el;
+  }
+  function makeRelChip(relation) {
+    const el = document.createElement("div");
+    el.className = "rel-chip";
+    el.textContent = relation.replace(/_/g, " ");
+    const col = REL_CHIP_COLORS[relation] || { bg: "rgba(127,127,127,0.12)", fg: "#8b98a5" };
+    el.style.background = col.bg;
+    el.style.color = col.fg;
+    return el;
+  }
+  function updateRelationChains(f) {
+    const cont = $("rel-chips");
+    const edges = (CURRENT && CURRENT.edges_by_frame && CURRENT.edges_by_frame[f]) || [];
+    $("rel-count").textContent = edges.length;
+    const shown = edges.slice(0, REL_MAX_CHAINS);
+    const desired = new Map(shown.map(e => [e.from_id + "|" + e.relation + "|" + e.to_id, e]));
+
+    const existing = new Map();
+    cont.querySelectorAll(".rel-chain").forEach(el => existing.set(el.dataset.key, el));
+    // exits: fade the whole chain out, then remove (timeout fallback)
+    existing.forEach((el, key) => {
+      if (!desired.has(key) && !el.classList.contains("exiting")) {
+        el.classList.add("exiting");
+        el.addEventListener("transitionend", () => { if (el.classList.contains("exiting")) el.remove(); }, { once: true });
+        setTimeout(() => { if (el.isConnected && el.classList.contains("exiting")) el.remove(); }, 260);
+      }
+    });
+    // entries: build [from](rel)[to] and fade the whole chain in
+    desired.forEach((e, key) => {
+      const ex = existing.get(key);
+      if (ex) { ex.classList.remove("exiting"); return; }
+      const chain = document.createElement("div");
+      chain.className = "rel-chain entering";
+      chain.dataset.key = key;
+      chain.appendChild(makeRelObjChip(e.from_id));
+      chain.appendChild(makeRelChip(e.relation));
+      chain.appendChild(makeRelObjChip(e.to_id));
+      cont.appendChild(chain);
+      requestAnimationFrame(() => requestAnimationFrame(() => chain.classList.remove("entering")));
+    });
+    // "+N more" muted caption, kept as the last child
+    let moreEl = cont.querySelector(".rel-more");
+    const extra = edges.length - shown.length;
+    if (extra > 0) {
+      if (!moreEl) { moreEl = document.createElement("div"); moreEl.className = "rel-more"; }
+      moreEl.textContent = "+" + extra + " more";
+      cont.appendChild(moreEl);
+    } else if (moreEl) {
+      moreEl.remove();
+    }
+  }
+
   function update(t) {
     let f = Math.round(t * FPS);
     if (f < 0) f = 0; if (f > MAXF) f = MAXF;
@@ -1704,6 +2295,7 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     updateLiveMetrics(f);
     updateBadges(f);
     updateObjChips(f);
+    updateRelationChains(f);
   }
 
   // ---- per-sequence derived state ----
@@ -1769,10 +2361,10 @@ const PAYLOAD = /*__DATA_JSON__*/null;
       $("taskName").textContent = "";
     }
     if (gt.failure_reason) {
-      reasonEl.className = "reason";
+      reasonEl.className = "reason tl-only";
       reasonEl.innerHTML = "<b>GT failure:</b> " + escapeHtml(gt.failure_reason);
     } else {
-      reasonEl.className = "reason empty";
+      reasonEl.className = "reason tl-only empty";
       reasonEl.textContent = "No ground-truth annotation for this sequence.";
     }
 
@@ -1785,7 +2377,6 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     $("m-conf-a").style.color = colA;
     $("m-conf-b").style.color = colB;
     $("m-dep-a").style.color = colA;
-    $("strip-ttl").textContent = "Scene-graph relation · " + la + " ↔ " + lb;
 
     // caption + dropdown sync
     $("showing").innerHTML = "Currently showing: <b>" + escapeHtml(CURRENT.sequence_id) +
@@ -1795,7 +2386,6 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     // availability messages
     const avail = CURRENT.available || {};
     $("depth-msg").classList.toggle("show", !avail.depth);
-    $("strip-msg").classList.toggle("show", !avail.scene_graph);
 
     // video
     setVideoSrc(sid);
@@ -1808,8 +2398,8 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     // reset playhead, paint after layout settles
     positionPlayheads(0);
     requestAnimationFrame(() => {
-      recomputeGeom(); drawStrip(); update(0);
-      requestAnimationFrame(() => { recomputeGeom(); drawStrip(); update(video.currentTime || 0); });
+      recomputeGeom(); drawGantt(); update(0);
+      requestAnimationFrame(() => { recomputeGeom(); drawGantt(); update(video.currentTime || 0); });
     });
   }
 
@@ -1822,27 +2412,9 @@ const PAYLOAD = /*__DATA_JSON__*/null;
 
   // ---- one-time setup ----
   function initOnce() {
-    // dropdown options
-    const sel = $("sequence-select");
-    Object.keys(SEQS).forEach(sid => {
-      const o = document.createElement("option");
-      o.value = sid;
-      const t = SEQS[sid].gt && SEQS[sid].gt.task_name;
-      o.textContent = t ? (sid + " — " + t) : sid;
-      sel.appendChild(o);
-    });
-    sel.addEventListener("change", () => switchSequence(sel.value));
-
-    // badges + strip legend (RELCOL is constant)
+    // (the shared dropdown is populated + wired by the tab coordinator)
+    // badges
     buildBadgesDOM();
-    (function () {
-      const order = ["near", "left_of", "above", "on_top_of", "inside"];
-      const items = order.filter(r => RELCOL[r]).map(r => ({ c: RELCOL[r], t: r.replace(/_/g, " ") }));
-      items.push({ c: "rgba(255,255,255,0.06)", t: "(none)" });
-      $("strip-legend").innerHTML = items.map(
-        it => `<span><i style="background:${it.c}"></i>${escapeHtml(it.t)}</span>`
-      ).join("");
-    })();
 
     // video listeners (persistent)
     video.addEventListener("timeupdate", () => update(video.currentTime));
@@ -1866,17 +2438,32 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     window.addEventListener("resize", () => {
       clearTimeout(rT);
       rT = setTimeout(() => {
-        recomputeGeom(); drawStrip(); sizeBboxCanvas(); drawBboxes();
+        recomputeGeom(); drawGantt(); sizeBboxCanvas(); drawBboxes();
         update(video.currentTime || 0);
       }, 80);
     });
+  }
 
-    // initial sequence
-    const defSid = SEQS[PAYLOAD.default_sequence] ? PAYLOAD.default_sequence : Object.keys(SEQS)[0];
-    loadSequence(defSid);
+  // Called by the tab coordinator when the Timeline tab becomes visible. Charts
+  // built while the panel was hidden have zero size, so resize + redraw against
+  // the now-live area; also (re)size the bbox canvas which needs the video laid out.
+  function onShow() {
+    recomputeGeom();
+    if (confChart) confChart.resize();
+    if (depChart) depChart.resize();
+    recomputeGeom();
+    drawGantt();
+    sizeBboxCanvas();
+    drawBboxes();
+    update(video.currentTime || 0);
+  }
+  function onHide() {
+    video.pause();
+    stopBboxLoop();
   }
 
   initOnce();
+  window.__timeline = { loadSequence, switchSequence, onShow, onHide };
 })();
 </script>
 </body>
@@ -2185,28 +2772,164 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     setTimeout(() => { renderAll(sid); body.classList.remove("switching"); }, 160);
   }
 
-  function init() {
-    const sel = $("sequence-select");
-    Object.keys(SEQS).forEach(sid => {
-      const o = document.createElement("option");
-      o.value = sid;
-      const t = SEQS[sid].gt && SEQS[sid].gt.task_name;
-      o.textContent = t ? (sid + " — " + t) : sid;
-      sel.appendChild(o);
-    });
-    sel.addEventListener("change", () => switchSequence(sel.value));
-
-    const defSid = SEQS[PAYLOAD.default_sequence] ? PAYLOAD.default_sequence : Object.keys(SEQS)[0];
-    renderAll(defSid);
+  // First paint on page load: render + staggered fade-in of the four cards.
+  // (the shared dropdown is populated + wired by the tab coordinator)
+  function firstPaint(sid) {
+    renderAll(sid);
     ["card-general", "card-dino", "card-inv", "card-llm"].forEach((id, i) =>
-      setTimeout(() => $(id).classList.add("in"), 50 * i));
+      setTimeout(() => { const el = $(id); if (el) el.classList.add("in"); }, 50 * i));
   }
 
-  init();
+  window.__overview = { switchSequence, renderAll, firstPaint };
 })();
 </script>
 </body>
 </html>
+"""
+
+
+# --------------------------------------------------------------------------- #
+# Merged-page pieces (combined Overview + Timeline tabs)
+# --------------------------------------------------------------------------- #
+MERGED_HEAD = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REFLECT — pipeline dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+<style>
+"""
+
+# One shared header for both tabs. seqId/task/reason/readout are timeline-only
+# (hidden on the Overview tab via body.tab-overview .tl-only). The dropdown +
+# "showing" caption are the single shared instance.
+GLOBAL_HEADER = r"""<header class="global-header">
+  <span class="app-title">Pipeline Dashboard</span>
+  <div class="seq-switcher"><select id="sequence-select"></select><span class="showing" id="showing"></span></div>
+  <span class="seq tl-only" id="seqId"></span>
+  <span class="task tl-only" id="taskName"></span>
+  <span class="reason tl-only" id="reason"></span>
+  <span class="spacer"></span>
+  <span class="readout tl-only">Frame <span id="frameNo">0</span> / <span id="frameTot">0</span> &middot; t = <span class="t" id="timeNo">0.00</span> s</span>
+  <div class="tabstrip">
+    <button class="tab" data-tab="overview">Overview</button>
+    <button class="tab" data-tab="timeline">Timeline</button>
+  </div>
+</header>
+"""
+
+# Page chrome — appended LAST so it overrides the index/overview body rules.
+MERGE_CSS = r"""
+  /* ===== merged page chrome (tabs + global header) — overrides above ===== */
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px; height: 100vh; overflow: hidden;
+    display: flex; flex-direction: column; gap: 7px; padding: 7px 9px;
+  }
+  .global-header {
+    flex: 0 0 auto; min-height: 44px;
+    display: flex; align-items: center; gap: 12px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0 12px; min-width: 0;
+  }
+  .app-title { font-weight: 700; font-size: 14px; white-space: nowrap; flex: 0 0 auto; }
+  .global-header .seq-switcher { flex: 0 0 auto; flex-direction: column; align-items: flex-start; }
+  .global-header .reason { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .global-header .spacer { flex: 1 1 auto; }
+  .tl-only { display: inline-flex; }
+  body.tab-overview .tl-only { display: none !important; }
+  .tabstrip { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; align-self: stretch; }
+  .tab {
+    appearance: none; -webkit-appearance: none; background: transparent; border: 0;
+    cursor: pointer; color: var(--muted); font: inherit; font-size: 13px;
+    padding: 6px 12px; border-bottom: 2px solid transparent; line-height: 1.2;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--text); border-bottom-color: #5b8def; }
+  .tab-panels { flex: 1 1 auto; min-height: 0; position: relative; }
+  .tab-panel { position: absolute; inset: 0; transition: opacity 150ms ease; opacity: 1; }
+  .tab-panel.fading { opacity: 0; }
+  #overview-panel { overflow-y: auto; padding: 2px 6px; }
+  #timeline-panel {
+    display: grid; grid-template-rows: minmax(220px, 2.3fr) 1.15fr 1.15fr 108px;
+    gap: 7px; overflow: hidden;
+  }
+"""
+
+# Tab coordinator — populates the single dropdown, drives both panels, handles
+# the tab strip + localStorage. Runs after both IIFEs (which expose __timeline/__overview).
+COORDINATOR_JS = r"""(function () {
+  "use strict";
+  const SEQS = PAYLOAD.sequences;
+  const sel = document.getElementById("sequence-select");
+  const T = window.__timeline || {};
+  const O = window.__overview || {};
+
+  // single shared dropdown, populated once
+  Object.keys(SEQS).forEach(sid => {
+    const o = document.createElement("option");
+    o.value = sid;
+    const t = SEQS[sid].gt && SEQS[sid].gt.task_name;
+    o.textContent = t ? (sid + " — " + t) : sid;
+    sel.appendChild(o);
+  });
+  const defSid = SEQS[PAYLOAD.default_sequence] ? PAYLOAD.default_sequence : Object.keys(SEQS)[0];
+  sel.value = defSid;
+
+  // Build both panels while both are still visible (Chart.js needs a sized canvas).
+  if (T.loadSequence) T.loadSequence(defSid);
+  if (O.firstPaint) O.firstPaint(defSid);
+
+  // dropdown drives both panels on every change
+  sel.addEventListener("change", () => {
+    const sid = sel.value;
+    if (T.switchSequence) T.switchSequence(sid);
+    if (O.switchSequence) O.switchSequence(sid);
+  });
+
+  // ---- tabs ----
+  const tabs = document.querySelectorAll(".tab");
+  const ovPanel = document.getElementById("overview-panel");
+  const tlPanel = document.getElementById("timeline-panel");
+  function readTab() {
+    try {
+      const s = localStorage.getItem("dash2_active_tab");
+      if (s === "overview" || s === "timeline") return s;
+    } catch (e) {}
+    return "overview";
+  }
+  function switchTab(name, animate) {
+    document.body.classList.toggle("tab-overview", name === "overview");
+    document.body.classList.toggle("tab-timeline", name === "timeline");
+    tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+    const show = name === "overview" ? ovPanel : tlPanel;
+    const hide = name === "overview" ? tlPanel : ovPanel;
+    if (name !== "timeline" && T.onHide) T.onHide();   // pause video + bbox loop
+    try { localStorage.setItem("dash2_active_tab", name); } catch (e) {}
+    if (!animate) {
+      hide.style.display = "none";
+      show.style.display = "";
+      if (name === "timeline" && T.onShow) T.onShow();
+      return;
+    }
+    hide.classList.add("fading");
+    setTimeout(() => {
+      hide.style.display = "none";
+      hide.classList.remove("fading");
+      show.style.display = "";
+      show.classList.add("fading");
+      requestAnimationFrame(() => {
+        show.classList.remove("fading");
+        if (name === "timeline" && T.onShow) T.onShow();
+      });
+    }, 150);
+  }
+  tabs.forEach(t => t.addEventListener("click", () => switchTab(t.dataset.tab, true)));
+  switchTab(readTab(), false);
+})();
 """
 
 
