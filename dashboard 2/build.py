@@ -46,17 +46,52 @@ PORT = 8765
 # appear in the most frames (see pick_main_objects).
 EXPECTED_MAIN = ["red apple_1", "dark blue bowl_2"]
 
-# Per-object-class colors, keyed by object_id. The front-end resolves colors by
-# *label* at runtime (so all apples are red, all bowls blue, across sequences),
-# using the label->color map derived from this constant plus a fallback palette.
+# Legacy explicit color overrides per object_id, kept as a reference / hardcode
+# escape hatch. Sequence colors are now derived from labels via
+# assign_sequence_colors(); this map is only consulted if an entry exists for a
+# specific object_id you want to pin to a non-default color.
 OBJECT_COLORS = {
     "red apple_1": "#d62728",
     "dark blue bowl_2": "#1f3a93",
 }
 
-# Deterministic palette for object classes with no entry in OBJECT_COLORS.
+# Color name -> hex. Keys MUST be lowercase. Multi-word keys (e.g. "dark blue")
+# are matched longest-first so "dark blue" wins over "blue" for "dark blue bowl".
+COLOR_NAME_HEX = {
+    "red":         "#d62728",
+    "dark red":    "#8b1a1a",
+    "light red":   "#f08080",
+    "blue":        "#1f77b4",
+    "dark blue":   "#1f3a93",
+    "light blue":  "#7fb3d5",
+    "green":       "#2ca02c",
+    "dark green":  "#1b5e20",
+    "light green": "#90ee90",
+    "yellow":      "#f0b400",
+    "orange":      "#ff7f0e",
+    "purple":      "#9467bd",
+    "pink":        "#e377c2",
+    "brown":       "#8c564b",
+    "black":       "#222222",
+    "white":       "#dddddd",
+    "gray":        "#7f7f7f",
+    "grey":        "#7f7f7f",
+}
+
+# Fallback palette when an object's natural color is already taken (or the label
+# has no recognizable color word). Picked from matplotlib tab10/tab20 leftovers
+# so it visually meshes with the natural colors above.
 FALLBACK_PALETTE = [
-    "#2ca02c", "#9467bd", "#17becf", "#bcbd22", "#e377c2", "#8c564b", "#7f7f7f",
+    "#17becf",  # teal
+    "#bcbd22",  # olive
+    "#aec7e8",  # pale blue
+    "#ffbb78",  # pale orange
+    "#98df8a",  # pale green
+    "#ff9896",  # salmon
+    "#c5b0d5",  # lavender
+    "#c49c94",  # tan
+    "#dbdb8d",  # mustard
+    "#9edae5",  # pale cyan
 ]
 
 # Relation -> color (matches the strip legend in the HTML).
@@ -71,6 +106,7 @@ RELATION_COLORS = {
 DASH_DIR = Path(__file__).resolve().parent          # ".../dashboard 2"
 HTML_OUT = DASH_DIR / "index.html"
 OVERVIEW_OUT = DASH_DIR / "overview.html"
+METRICS_OUT = DASH_DIR / "metrics.html"
 VIDEO_OUT_DIR = DASH_DIR / "video"
 
 # ---- LLM (Ollama) configuration for the overview-page commentary ----------- #
@@ -78,8 +114,8 @@ OLLAMA_HOST     = "http://localhost:11434"
 OLLAMA_MODEL    = "llama3.1:8b"
 OLLAMA_FALLBACK = "llama3:latest"   # used if the preferred model isn't installed
 LLM_TEMPERATURE = 0.1
-LLM_TIMEOUT_S   = 60
-PROMPT_VERSION  = "overview_v2.3"
+LLM_TIMEOUT_S   = 180
+PROMPT_VERSION  = "overview_v2.5"
 LLM_CACHE_DIR   = DASH_DIR / ".llm_cache"
 
 
@@ -329,6 +365,76 @@ def _flag_bursts(fired_frames, gap: int = 4, min_span: int = 5) -> list:
     return out
 
 
+def extract_color_word(label: str) -> str | None:
+    """Return the recognized color word from a label, or None. Longest-key-first,
+    lowercase, word-boundary aware. "dark blue bowl"->"dark blue", "purple cup"->
+    "purple", "coffee machine"->None."""
+    if not label:
+        return None
+    l = label.lower().strip()
+    for key in sorted(COLOR_NAME_HEX.keys(), key=len, reverse=True):
+        if l == key or l.startswith(key + " ") or l.endswith(" " + key) or \
+           (" " + key + " ") in l:
+            return key
+    return None
+
+
+def assign_sequence_colors(objects: list[dict]) -> dict:
+    """Assign a chart color to every object_id in the sequence.
+
+    Rules: same label -> same color; different labels sharing a natural color ->
+    the longer-lived (more n_frames) claims it, others fall back; labels with no
+    color word -> next FALLBACK_PALETTE slot; explicit OBJECT_COLORS pins win.
+    Deterministic (no randomness) so builds are reproducible.
+    """
+    pinned = {oid: OBJECT_COLORS[oid] for o in objects
+              if (oid := o.get("object_id")) and oid in OBJECT_COLORS}
+
+    # Group by label; same label is one shared assignment.
+    labels_in_order: list[str] = []
+    label_frames: dict[str, int] = {}
+    label_objects: dict[str, list[str]] = {}
+    for o in objects:
+        lbl = o.get("label") or ""
+        oid = o.get("object_id") or ""
+        nfr = int(o.get("n_frames") or 0)
+        if lbl not in label_frames:
+            labels_in_order.append(lbl)
+            label_frames[lbl] = 0
+            label_objects[lbl] = []
+        label_frames[lbl] += nfr
+        label_objects[lbl].append(oid)
+
+    # Most-tracked label wins ties; discovery order breaks remaining ties.
+    sorted_labels = sorted(
+        labels_in_order,
+        key=lambda l: (-label_frames[l], labels_in_order.index(l)),
+    )
+
+    taken: set[str] = set()
+    label_color: dict[str, str] = {}
+
+    def next_fallback() -> str:
+        for c in FALLBACK_PALETTE:
+            if c not in taken:
+                return c
+        return FALLBACK_PALETTE[len(taken) % len(FALLBACK_PALETTE)]
+
+    for lbl in sorted_labels:
+        # A pin on any of this label's objects takes priority over the natural
+        # color word (and keeps same-label objects on the same color).
+        pin = next((pinned[oid] for oid in label_objects[lbl] if oid in pinned), None)
+        desired = pin or COLOR_NAME_HEX.get(extract_color_word(lbl) or "")
+        chosen = desired if (desired and desired not in taken) else next_fallback()
+        label_color[lbl] = chosen
+        taken.add(chosen)
+
+    result = {oid: label_color[lbl]
+              for lbl, oids in label_objects.items() for oid in oids}
+    result.update(pinned)   # exact per-object_id pins always win
+    return result
+
+
 def build_data(repo: Path, seq_id: str) -> dict:
     """Build the per-sequence payload (same shape the old single-sequence DATA
     had). Optional modules (depth, scene_graph, validation) yield empty
@@ -563,13 +669,20 @@ def build_data(repo: Path, seq_id: str) -> dict:
     dino_runs = [r for r in detection if r.get("detector_ran")]
     reasons = Counter(r.get("trigger_reason", "") for r in dino_runs)
     n_runs = len(dino_runs)
-    recovery_rate = (round((n_runs - reasons.get("frame_counter_K", 0)
-                            - reasons.get("init", 0)) / n_runs, 3) if n_runs else 0.0)
+    meaningful_triggers = (n_runs - reasons.get("frame_counter_K", 0)
+                           - reasons.get("init", 0))
+    recovery_rate = (round(meaningful_triggers / n_frames, 4)
+                     if n_frames else 0.0)
     dino_stats = {
         "n_runs": n_runs,
         "trigger_reasons": dict(reasons),
+        "meaningful_triggers": meaningful_triggers,
         "recovery_rate": recovery_rate,
-        "recovery_rate_note": "fraction of calls triggered by something other than frame_counter_K or init",
+        "recovery_rate_note": (
+            "fraction of total frames where DINO ran due to a genuine recovery "
+            "trigger (i.e. excluding routine frame_counter_K timeouts and the "
+            "init detection); answers 'how often did the tracker need to recover.'"
+        ),
     }
 
     object_inventory = {m: unique_ids_by_label(rows_by_mod[m], extractors[m])
@@ -792,6 +905,18 @@ def build_data(repo: Path, seq_id: str) -> dict:
             "ranges": _contiguous_ranges(fids, max_gap=1),
         }
 
+    # ---- Per-object colors derived from label color-words (no AI) -------------
+    # Covers EVERY tracked object_id (charts, Gantt, chips, bbox overlay all read
+    # from this single map). Same label -> same color; collisions resolved by
+    # n_frames; OBJECT_COLORS pins win. Deterministic.
+    object_colors = assign_sequence_colors([
+        {"object_id": oid, "label": v["label"], "n_frames": v["n_frames"]}
+        for oid, v in object_presence_ranges.items()
+    ])
+    for oid in per_object:
+        if oid in object_colors:
+            per_object[oid]["color"] = object_colors[oid]
+
     # ---- Per-frame scene-graph edges for the live "Relations" chip row -------
     edges_by_frame: dict[int, list] = {}
     for r in scene_graph:
@@ -825,6 +950,7 @@ def build_data(repo: Path, seq_id: str) -> dict:
         "bbox_by_frame": {"tracker": bbox_tracker, "detector": bbox_detector},
         "sg_by_frame": sg_by_frame,
         "object_presence_ranges": object_presence_ranges,
+        "object_colors": object_colors,
         "edges_by_frame": edges_by_frame,
         "video_dims": video_dims,
         "available": {
@@ -944,10 +1070,16 @@ succeeded or failed. Describe what the data shows; let the reader judge.
 ### Grounding DINO cadence
 
 DINO runs automatically every 30 frames via the routine timeout
-(frame_counter_K_flag). When computing or commenting on the "DINO recovery rate,"
-EXCLUDE these routine calls — they do not indicate the tracker was struggling.
-The meaningful re-detections are those triggered by tracker_low_confidence,
-bbox_size_change, drift, or depth_jump.
+(frame_counter_K_flag). These routine calls do NOT indicate that the tracker was
+struggling. The meaningful re-detections are those triggered by
+tracker_low_confidence, bbox_size_change, drift, or depth_jump.
+
+The input field `dino_stats.recovery_rate` is the **fraction of total frames
+where DINO ran due to a genuine recovery trigger** (i.e. excluding the routine
+frame_counter_K timeouts and the init detection). It answers "how often did the
+tracker need to recover?" — a small percentage (e.g. 5-10%) is typical for a
+healthy run; a much higher value signals frequent instability. Interpret the
+metric per-frame, not per-DINO-call.
 
 ### Tracker confidence drops
 
@@ -1181,11 +1313,23 @@ def _placeholder_llm(input_hash: str) -> dict:
 def _call_ollama(model: str, summary: dict) -> dict | None:
     """Call Ollama /api/chat and return a validated {summary, highlights} dict, or
     None on any failure. Never raises."""
+    # Wrap the data in an explicit instruction. Without this, weaker models (e.g.
+    # the llama3:latest fallback) tend to just echo the input JSON back verbatim
+    # under format:"json" instead of producing the {summary, highlights} review.
+    user_msg = (
+        "Analyze the following robot-perception pipeline summary and write your review.\n"
+        "Respond with ONLY a JSON object of this exact shape:\n"
+        '{"summary": "2-3 sentence overview", '
+        '"highlights": [{"text": "...", "severity": "info|warning|alert"}]}\n'
+        "Do NOT repeat, echo, or copy the input fields shown below; produce your OWN "
+        "analysis of them.\n\n"
+        "PIPELINE_SUMMARY_INPUT:\n" + json.dumps(summary, indent=2)
+    )
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(summary, indent=2)},
+            {"role": "user", "content": user_msg},
         ],
         "stream": False,
         "format": "json",
@@ -1345,6 +1489,316 @@ def render_merged(payload: dict) -> str:
     return build_merged_template().replace("/*__DATA_JSON__*/null", payload_json)
 
 
+# --------------------------------------------------------------------------- #
+# LLM evaluation metrics (no human annotation — output vs. structured input)
+# --------------------------------------------------------------------------- #
+_NUMBER_PAT = re.compile(r"(?<![A-Za-z_])(\d+(?:\.\d+)?)(?![A-Za-z_])")
+_FRAME_PAT = re.compile(r"\bframes?\s+(\d+)(?:\s*[-–]\s*(\d+))?", re.IGNORECASE)
+
+
+def check_schema(output: dict) -> dict:
+    """Schema validity: is the LLM output well-formed?
+    Returns {"passed": bool, "issues": [str, ...]}."""
+    issues = []
+    if not isinstance(output, dict):
+        return {"passed": False, "issues": ["output is not a dict"]}
+    if "summary" not in output or not isinstance(output["summary"], str):
+        issues.append("missing or non-string 'summary'")
+    hl = output.get("highlights")
+    if not isinstance(hl, list):
+        issues.append("'highlights' is not a list")
+    else:
+        for i, h in enumerate(hl):
+            if not isinstance(h, dict):
+                issues.append(f"highlight {i} is not a dict")
+                continue
+            if "text" not in h or not isinstance(h.get("text"), str):
+                issues.append(f"highlight {i} missing 'text'")
+            if h.get("severity") not in {"info", "warning", "alert"}:
+                issues.append(f"highlight {i} has invalid severity")
+    return {"passed": not issues, "issues": issues}
+
+
+def check_references(summary_input: dict, output: dict) -> dict:
+    """Reference validity: every cited frame_id and object_id exists in input.
+    Returns {"total", "valid", "rate", "invalid_examples"}."""
+    n_frames = int(summary_input.get("n_frames", 0))
+    valid_oids = set()
+    for oid in (summary_input.get("tracker_confidence_stats") or {}):
+        valid_oids.add(oid)
+    for oid in (summary_input.get("tracker_status_summary") or {}):
+        valid_oids.add(oid)
+    for m in (summary_input.get("cross_module_mismatches") or []):
+        if isinstance(m, dict) and m.get("oid"):
+            valid_oids.add(m["oid"])
+
+    total = valid = 0
+    bad = []
+    for h in (output.get("highlights") or []):
+        text = h.get("text") or ""
+        for m in _FRAME_PAT.finditer(text):
+            a = int(m.group(1))
+            b = int(m.group(2)) if m.group(2) else a
+            for f in (a, b):
+                total += 1
+                if 0 <= f < n_frames:
+                    valid += 1
+                else:
+                    bad.append(f"frame {f} outside [0,{n_frames - 1}]")
+        for oid in valid_oids:
+            if oid in text:
+                total += 1
+                valid += 1
+        valid_lower = {oid.lower() for oid in valid_oids}
+        for token in re.findall(r"\b[a-z][a-z _]*_\d+\b", text.lower()):
+            if token not in valid_lower:
+                total += 1
+                bad.append(f"object_id '{token}' not in input")
+
+    rate = (valid / total) if total else 1.0
+    return {"total": total, "valid": valid, "rate": round(rate, 4),
+            "invalid_examples": bad[:6]}
+
+
+def check_grounding(summary_input: dict, output: dict) -> dict:
+    """Numeric grounding: every cited number appears in the input data.
+    Returns {"total", "grounded", "rate", "ungrounded_examples"}."""
+    input_text = json.dumps(summary_input, sort_keys=True)
+
+    def appears(num_str: str) -> bool:
+        if num_str in input_text:
+            return True
+        try:
+            v = float(num_str)
+        except ValueError:
+            return False
+        for prec in (3, 2, 1, 0):
+            r = round(v, prec)
+            if f"{r}" in input_text or f"{r:.{prec}f}" in input_text:
+                return True
+        return False
+
+    total = grounded = 0
+    bad = []
+    for h in (output.get("highlights") or []):
+        text = h.get("text") or ""
+        text_without_frames = _FRAME_PAT.sub("", text)
+        for m in _NUMBER_PAT.finditer(text_without_frames):
+            num = m.group(1)
+            try:
+                if float(num) < 5 and "." not in num:
+                    continue
+            except ValueError:
+                continue
+            total += 1
+            if appears(num):
+                grounded += 1
+            else:
+                bad.append(num)
+
+    rate = (grounded / total) if total else 1.0
+    return {"total": total, "grounded": grounded, "rate": round(rate, 4),
+            "ungrounded_examples": bad[:6]}
+
+
+def _metric_tier(rate) -> str:
+    if rate is None:
+        return "na"
+    if rate >= 0.95:
+        return "good"
+    if rate >= 0.80:
+        return "warn"
+    return "bad"
+
+
+def _mesc(s) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+_METRICS_CSS = """
+  /* the reused overview-card CSS starts at opacity:0 (it fades in via JS on the
+     dashboard); this static page has no such JS, so force the cards visible. */
+  .metrics-card { opacity: 1; transform: none; }
+  .metrics-wrap { display: flex; flex-direction: column; gap: 1rem; max-width: 1080px; margin: 0 auto; }
+  .metrics-header h1 { font-size: 20px; font-weight: 800; margin: 2px 0 5px; }
+  .metrics-header .cap { color: var(--muted); font-size: 12.5px; line-height: 1.55; max-width: 900px; }
+  .card-explainer { color: var(--muted); font-size: 12.5px; line-height: 1.6; margin: 4px 0 14px; }
+  .metrics-table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 8px; }
+  .metrics-table th, .metrics-table td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+  .metrics-table th { color: var(--muted); font-weight: 600; background: var(--panel-2); }
+  .metrics-table td.num-col { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .metrics-table .ok { color: #2ca02c; font-weight: 700; }
+  .metrics-table .fail { color: #c62828; font-weight: 700; }
+  .metrics-table td.rate { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .metrics-table td.rate[data-tier="good"] { color: #2ca02c; }
+  .metrics-table td.rate[data-tier="warn"] { color: #bf7900; }
+  .metrics-table td.rate[data-tier="bad"]  { color: #c62828; }
+  .metrics-table td.rate[data-tier="na"]   { color: var(--muted); font-weight: 400; }
+  .metrics-table td.examples { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  .metrics-foot { color: var(--muted); font-size: 11.5px; line-height: 1.6; margin: 4px 2px 24px; max-width: 980px; }
+  .metrics-foot .gen { font-size: 11px; opacity: .8; margin-bottom: 6px; }
+"""
+
+_EXPLAIN_SCHEMA = (
+    "Did each LLM output parse as valid JSON with the expected structure "
+    "(a summary string plus a list of highlights, each with text and severity)? "
+    "The build's validator drops malformed entries before rendering, so 100% "
+    "confirms the validator is working — anything lower would mean the model "
+    "produced output the dashboard couldn't render."
+)
+_EXPLAIN_REFERENCES = (
+    "Every highlight references concrete things from the input — specific frame "
+    "IDs and object IDs. This metric checks: for each citation, does the cited "
+    "entity actually exist in the structured summary that was sent to the LLM? "
+    "Invalid references would mean the model invented frames or objects that "
+    "don't exist in the data. The build's validator already filters references "
+    "on the way out, so a high rate confirms the safety net is working."
+)
+_EXPLAIN_GROUNDING = (
+    "When the LLM cites a specific number — a tracker confidence value, a frame "
+    "count, a percentage — does that number actually appear in the input data? "
+    "This catches hallucinated specifics: numbers that sound plausible but the "
+    "model made up. The check rounds floats to common precisions before matching, "
+    "so a value of 0.31 still counts as grounded if the input has 0.314. A low "
+    "score here means the model is inventing numerical details."
+)
+_METRICS_LIMITATIONS = (
+    "Limitations: these three metrics measure well-formedness and grounding only. "
+    "They do not measure whether the LLM caught the most important findings "
+    "(coverage) or whether the commentary was useful to a reader — those require "
+    "human review. For a higher-stakes evaluation, complement these automated "
+    "metrics with a small Likert-rated user study."
+)
+
+
+def _fmt_pct(rate) -> str:
+    return "n/a" if rate is None else f"{rate * 100:.0f}%"
+
+
+def render_metrics_html(metrics_per_seq: dict) -> str:
+    ov_css, _, _ = _extract_overview_parts()
+    seqs = list(metrics_per_seq.keys())
+    avail = [s for s in seqs if metrics_per_seq[s]["llm_available"]]
+
+    # ---- aggregates over AVAILABLE sequences only ----
+    sch_rate = (sum(1 for s in avail if metrics_per_seq[s]["schema"]["passed"]) / len(avail)
+                if avail else None)
+
+    def agg(metric_key, valid_key):
+        tot = sum(metrics_per_seq[s][metric_key]["total"] for s in avail)
+        val = sum(metrics_per_seq[s][metric_key][valid_key] for s in avail)
+        return (val / tot) if tot else (1.0 if avail else None)
+
+    ref_rate = agg("references", "valid")
+    grd_rate = agg("grounding", "grounded")
+
+    # ---- per-sequence rows ----
+    def schema_rows():
+        out = []
+        for s in seqs:
+            m = metrics_per_seq[s]
+            if not m["llm_available"]:
+                out.append(f'<tr><td>{_mesc(s)}</td>'
+                           f'<td class="rate" data-tier="na">n/a</td>'
+                           f'<td class="examples">LLM unavailable</td></tr>')
+                continue
+            sch = m["schema"]
+            res = ('<span class="ok">PASS</span>' if sch["passed"]
+                   else '<span class="fail">FAIL</span>')
+            issues = "—" if not sch["issues"] else _mesc("; ".join(sch["issues"][:4]))
+            out.append(f'<tr><td>{_mesc(s)}</td><td>{res}</td>'
+                       f'<td class="examples">{issues}</td></tr>')
+        return "\n".join(out)
+
+    def rate_rows(metric_key, valid_key, examples_key):
+        out = []
+        for s in seqs:
+            m = metrics_per_seq[s]
+            if not m["llm_available"]:
+                out.append(f'<tr><td>{_mesc(s)}</td>'
+                           f'<td class="rate" data-tier="na">n/a</td>'
+                           f'<td class="num-col">—</td>'
+                           f'<td class="examples">LLM unavailable</td></tr>')
+                continue
+            mm = m[metric_key]
+            tier = _metric_tier(mm["rate"])
+            ex = mm.get(examples_key) or []
+            ex_str = "—" if not ex else _mesc("; ".join(str(e) for e in ex))
+            out.append(f'<tr><td>{_mesc(s)}</td>'
+                       f'<td class="rate" data-tier="{tier}">{_fmt_pct(mm["rate"])}</td>'
+                       f'<td class="num-col">{mm[valid_key]} / {mm["total"]}</td>'
+                       f'<td class="examples">{ex_str}</td></tr>')
+        return "\n".join(out)
+
+    schema_card = f"""
+  <div class="overview-card metrics-card">
+    <div class="card-title">Schema Validity</div>
+    <p class="card-explainer">{_EXPLAIN_SCHEMA}</p>
+    <div class="big-stat"><span class="num">{_fmt_pct(sch_rate)}</span>
+      <span class="lbl">aggregate pass rate</span></div>
+    <table class="metrics-table">
+      <tr><th>Sequence</th><th>Result</th><th>Issues</th></tr>
+      {schema_rows()}
+    </table>
+  </div>"""
+
+    ref_card = f"""
+  <div class="overview-card metrics-card">
+    <div class="card-title">Reference Validity</div>
+    <p class="card-explainer">{_EXPLAIN_REFERENCES}</p>
+    <div class="big-stat"><span class="num">{_fmt_pct(ref_rate)}</span>
+      <span class="lbl">aggregate valid-reference rate</span></div>
+    <table class="metrics-table">
+      <tr><th>Sequence</th><th>Rate</th><th>Valid / Total</th><th>Failing examples</th></tr>
+      {rate_rows("references", "valid", "invalid_examples")}
+    </table>
+  </div>"""
+
+    grd_card = f"""
+  <div class="overview-card metrics-card">
+    <div class="card-title">Numeric Grounding</div>
+    <p class="card-explainer">{_EXPLAIN_GROUNDING}</p>
+    <div class="big-stat"><span class="num">{_fmt_pct(grd_rate)}</span>
+      <span class="lbl">aggregate grounded-number rate</span></div>
+    <table class="metrics-table">
+      <tr><th>Sequence</th><th>Rate</th><th>Grounded / Total</th><th>Failing examples</th></tr>
+      {rate_rows("grounding", "grounded", "ungrounded_examples")}
+    </table>
+  </div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REFLECT — LLM evaluation metrics</title>
+<style>
+{ov_css}
+{_METRICS_CSS}
+</style>
+</head>
+<body>
+<div class="metrics-wrap">
+  <div class="metrics-header">
+    <h1>LLM Evaluation Metrics</h1>
+    <div class="cap">Automated checks of the Overview-tab LLM commentary across all
+    sequences. No human review required — every check compares the model's output
+    against the structured summary that was sent to it.</div>
+  </div>
+{schema_card}
+{ref_card}
+{grd_card}
+  <div class="metrics-foot">
+    <div class="gen">Generated {_utc_now()} · prompt {_mesc(PROMPT_VERSION)}</div>
+    {_METRICS_LIMITATIONS}
+  </div>
+</div>
+</body>
+</html>
+"""
+
+
 def main() -> None:
     repo = find_repo_root(DASH_DIR)
     jsonl_root = repo / "pipeline" / "real_world" / "jsonl"
@@ -1373,11 +1827,21 @@ def main() -> None:
         "llm_preferred_model": OLLAMA_MODEL,
     }
 
+    metrics_per_seq = {}
     for seq in sequences:
         d = build_data(repo, seq)
         summary = d.pop("_llm_input", {})
         d["overview"]["llm_overview"] = get_llm_overview(model, seq, summary)
         payload["sequences"][seq] = d
+        # Automated LLM-quality metrics: output validated against the structured
+        # input that was sent to the model (no human annotation).
+        llm_overview = d["overview"]["llm_overview"]
+        metrics_per_seq[seq] = {
+            "schema":        check_schema(llm_overview),
+            "references":    check_references(summary, llm_overview),
+            "grounding":     check_grounding(summary, llm_overview),
+            "llm_available": bool(llm_overview.get("summary")),
+        }
         avail = d["available"]
         flags = [m for m in ("depth", "scene_graph", "validation") if not avail[m]]
         note = f" [missing: {', '.join(flags)}]" if flags else ""
@@ -1399,6 +1863,9 @@ def main() -> None:
     if OVERVIEW_OUT.exists():
         OVERVIEW_OUT.unlink()
         print(f"  removed stale {OVERVIEW_OUT}")
+
+    METRICS_OUT.write_text(render_metrics_html(metrics_per_seq), encoding="utf-8")
+    print(f"  wrote {METRICS_OUT}")
 
     ensure_gitignore()
 
@@ -1739,6 +2206,14 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     for (const w in KEYWORD_COLORS) { if (words.includes(w)) return KEYWORD_COLORS[w]; }
     return FALLBACK[idx % FALLBACK.length];
   }
+  // Single source of truth for object colors: the per-sequence map built at
+  // build time from label color-words (CURRENT.object_colors). Falls back to
+  // label-based resolution for ids not in the map (e.g. "gripper").
+  function colorOf(oid) {
+    const oc = CURRENT && CURRENT.object_colors;
+    if (oc && oc[oid]) return oc[oid];
+    return chipColor(oid);
+  }
   const relLabel = r => (r ? r.replace(/_/g, " ") : "(none)");
   const $ = id => document.getElementById(id);
   const fmt = (v, d) => (v == null ? "—" : Number(v).toFixed(d));
@@ -1985,7 +2460,7 @@ const PAYLOAD = /*__DATA_JSON__*/null;
 
     for (let i = 0; i < ids.length; i++) {
       const obj = opr[ids[i]];
-      const color = resolveColor(obj.label, i);
+      const color = colorOf(ids[i]);
       const y = i * rowH + 1.5;
       const h = Math.max(4, rowH - 3);
       // id label in the left gutter (same width as the charts' y-axis)
@@ -2057,6 +2532,12 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     if (status === "drifting" || status === "occluded") return "#ff7f0e";
     return "#1f77b4";
   }
+  // Tracker box stroke: the object's own color (same as its chart line/Gantt/chip).
+  // A non-ok validation status still overrides it (amber/red) as a degradation cue.
+  function boxColorFor(oid, status) {
+    if (status === "drifting" || status === "occluded" || status === "lost") return statusColor(status);
+    return colorOf(oid);
+  }
   // s = display scale; line widths & font are divided by it so they render at a
   // constant on-screen size regardless of the source resolution.
   function drawBox(bb, color, label, s) {
@@ -2090,7 +2571,7 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     const bbf = CURRENT.bbox_by_frame;
     const trk = (bbf.tracker && bbf.tracker[f]) || [];
     const det = (bbf.detector && bbf.detector[f]) || [];
-    trk.forEach(b => drawBox(b.bbox, statusColor(b.status), "TRK " + b.oid, s));
+    trk.forEach(b => drawBox(b.bbox, boxColorFor(b.oid, b.status), "TRK " + b.oid, s));
     det.forEach(b => drawBox(
       b.bbox, "#2ca02c",
       "DET " + (b.label || "") + (b.conf != null ? " " + b.conf.toFixed(2) : ""), s));
@@ -2168,7 +2649,7 @@ const PAYLOAD = /*__DATA_JSON__*/null;
   }
   const isPhantom = oid => !mainSet.has(oid);
   function makeChip(oid) {
-    const c = chipColor(oid);
+    const c = colorOf(oid);
     const el = document.createElement("div");
     el.className = "obj-chip entering" + (isPhantom(oid) ? " phantom" : "");
     el.dataset.oid = oid;
@@ -2227,7 +2708,7 @@ const PAYLOAD = /*__DATA_JSON__*/null;
   };
   const REL_MAX_CHAINS = 4;
   function makeRelObjChip(oid) {
-    const c = chipColor(oid);
+    const c = colorOf(oid);
     const el = document.createElement("div");
     el.className = "obj-chip" + (isPhantom(oid) ? " phantom" : "");
     el.textContent = oid;
@@ -2313,8 +2794,8 @@ const PAYLOAD = /*__DATA_JSON__*/null;
     gt = CURRENT.gt || {};
     gtFrames = (gt.failure_window_frames && gt.failure_window_frames.length === 2)
       ? gt.failure_window_frames : null;
-    colA = resolveColor(OA && COL[OA] ? COL[OA].label : OA, 0);
-    colB = resolveColor(OB && COL[OB] ? COL[OB].label : OB, 1);
+    colA = colorOf(OA);
+    colB = colorOf(OB);
 
     const S = CURRENT.series;
     confFill = {}; depFill = {};
@@ -2698,8 +3179,10 @@ const PAYLOAD = /*__DATA_JSON__*/null;
       + `<div class="subhead">Total DINO runs: <b style="color:var(--text)">${ds.n_runs}</b></div>`
       + `<div class="subhead" style="margin-top:4px">Runs by trigger reason</div>`
       + `<div class="pill-row">${pills}</div>`
-      + `<div class="caption">Recovery rate excludes <code>frame_counter_K</code> — the routine `
-      + `30-frame timeout that fires whether or not the tracker is struggling.</div>`;
+      + `<div class="caption">Fraction of total frames where DINO ran due to a genuine `
+      + `recovery trigger. Excludes <code>frame_counter_K</code> (the routine 30-frame `
+      + `timeout) and the <code>init</code> detection. Answers: <em>how often did the `
+      + `tracker need to recover?</em></div>`;
   }
 
   function renderInventory(d) {

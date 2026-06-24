@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REFLECT — LLM evaluation metrics</title>
+<style>
+
+  :root {
+    --bg: #0f1419;
+    --panel: #161c24;
+    --panel-2: #1c242e;
+    --border: #2a3441;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --accent: #ffb000;
+    --gt: #d62728;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px; min-height: 100vh; padding: 8px 14px;
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em; background: var(--panel-2); padding: 1px 5px; border-radius: 4px;
+  }
+
+  /* ---------- Header (matches index.html) ---------- */
+  .ov-header {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 16px; margin-bottom: 0.6rem;
+  }
+  .ov-title { font-weight: 700; font-size: 18px; white-space: nowrap; }
+  .spacer { flex: 1 1 auto; }
+  .seq-switcher {
+    display: flex; flex-direction: column; justify-content: center;
+    gap: 2px; min-width: 0; flex: 0 0 auto; align-items: flex-end;
+  }
+  select#sequence-select {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 8px; font-size: 12px; font-family: inherit;
+    max-width: 320px; cursor: pointer; font-weight: 600;
+  }
+  .showing {
+    color: var(--muted); font-size: 10px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: 360px;
+  }
+  .showing b { color: var(--text); font-weight: 600; }
+
+  /* ---------- Cards ---------- */
+  .overview-body { display: grid; grid-template-columns: 1fr; gap: 0.6rem; }
+  .overview-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 18px;
+    opacity: 0; transform: translateY(8px);
+    transition: opacity .18s ease-out, transform .18s ease-out;
+  }
+  .overview-card.in { opacity: 1; transform: none; }
+  .overview-body.switching .overview-card.in { opacity: 0; transform: translateY(6px); }
+  .card-title {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted); margin: 0 0 8px; font-weight: 700;
+  }
+
+  /* key/value */
+  .kv { display: grid; grid-template-columns: 170px 1fr; gap: 5px 16px; align-items: baseline; }
+  .kv .k { color: var(--muted); font-size: 12px; }
+  .kv .v { color: var(--text); font-size: 13px; }
+  .kv .v.reason { font-style: italic; }
+  .kv .v .sub { color: var(--muted); }
+  .muted-italic { color: var(--muted); font-style: italic; }
+  .subhead { color: var(--muted); font-size: 12px; margin: 9px 0 6px; }
+
+  /* pills (match index event-badge styling) */
+  .pill-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ov-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  }
+  .ov-pill .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ov-pill.t-frame  { border-color: #3b6db5; color: #9ec3ff; background: rgba(59,109,181,0.12); }
+  .ov-pill.t-amber  { border-color: #ff7f0e; color: #ffc98a; background: rgba(255,127,14,0.12); }
+  .ov-pill.t-red    { border-color: #d62728; color: #ff9b9b; background: rgba(214,39,40,0.12); }
+  .ov-pill.t-purple { border-color: #9467bd; color: #c9adea; background: rgba(148,103,189,0.12); }
+
+  /* DINO big stat */
+  .big-stat { display: flex; align-items: baseline; gap: 12px; }
+  .big-stat .num { font-size: 38px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; color: var(--text); }
+  .big-stat .lbl { color: var(--muted); font-size: 13px; }
+  .caption { color: var(--muted); font-size: 11px; margin-top: 9px; line-height: 1.5; }
+
+  /* inventory table */
+  table.inv { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  table.inv th, table.inv td { border: 1px solid var(--border); padding: 6px 10px; text-align: center; }
+  table.inv th { color: var(--muted); font-weight: 600; background: var(--panel-2); }
+  table.inv td.label { text-align: left; font-family: ui-monospace, Menlo, monospace; color: var(--text); }
+  table.inv td.c-ok { color: var(--text); }
+  table.inv td.c-miss { background: rgba(214,39,40,0.14); color: #ffb3b3; }
+  table.inv td.c-extra { background: rgba(255,127,14,0.16); color: #ffce9b; }
+
+  /* LLM card */
+  .llm-summary { font-size: 16px; line-height: 1.6; color: var(--text); margin: 2px 0 11px; }
+  .highlights { display: flex; flex-direction: column; gap: 6px; }
+  .hl {
+    display: flex; align-items: flex-start; gap: 10px; padding: 8px 11px;
+    border-radius: 8px; border: 1px solid var(--border);
+    opacity: 0; transform: translateY(6px);
+    transition: opacity .12s ease-out, transform .12s ease-out;
+  }
+  .hl.in { opacity: 1; transform: none; }
+  .hl.sev-alert   { background: rgba(214,39,40,0.06); }
+  .hl.sev-warning { background: rgba(255,127,14,0.06); }
+  .hl.sev-info    { background: rgba(127,127,127,0.04); }
+  .sev-pill {
+    flex: 0 0 auto; font-size: 10.5px; font-weight: 700; text-transform: lowercase;
+    padding: 2px 9px; border-radius: 999px; color: #fff; margin-top: 1px;
+  }
+  .sev-pill.alert   { background: #d62728; }
+  .sev-pill.warning { background: #ff7f0e; color: #1a1a1a; }
+  .sev-pill.info    { background: #7f7f7f; }
+  .hl .hl-text { font-size: 13.5px; line-height: 1.5; }
+  .llm-footer { color: var(--muted); font-size: 11px; margin-top: 10px; }
+  .llm-unavailable { font-style: italic; color: var(--muted); line-height: 1.6; }
+
+
+  /* the reused overview-card CSS starts at opacity:0 (it fades in via JS on the
+     dashboard); this static page has no such JS, so force the cards visible. */
+  .metrics-card { opacity: 1; transform: none; }
+  .metrics-wrap { display: flex; flex-direction: column; gap: 1rem; max-width: 1080px; margin: 0 auto; }
+  .metrics-header h1 { font-size: 20px; font-weight: 800; margin: 2px 0 5px; }
+  .metrics-header .cap { color: var(--muted); font-size: 12.5px; line-height: 1.55; max-width: 900px; }
+  .card-explainer { color: var(--muted); font-size: 12.5px; line-height: 1.6; margin: 4px 0 14px; }
+  .metrics-table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 8px; }
+  .metrics-table th, .metrics-table td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+  .metrics-table th { color: var(--muted); font-weight: 600; background: var(--panel-2); }
+  .metrics-table td.num-col { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .metrics-table .ok { color: #2ca02c; font-weight: 700; }
+  .metrics-table .fail { color: #c62828; font-weight: 700; }
+  .metrics-table td.rate { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .metrics-table td.rate[data-tier="good"] { color: #2ca02c; }
+  .metrics-table td.rate[data-tier="warn"] { color: #bf7900; }
+  .metrics-table td.rate[data-tier="bad"]  { color: #c62828; }
+  .metrics-table td.rate[data-tier="na"]   { color: var(--muted); font-weight: 400; }
+  .metrics-table td.examples { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  .metrics-foot { color: var(--muted); font-size: 11.5px; line-height: 1.6; margin: 4px 2px 24px; max-width: 980px; }
+  .metrics-foot .gen { font-size: 11px; opacity: .8; margin-bottom: 6px; }
+
+</style>
+</head>
+<body>
+<div class="metrics-wrap">
+  <div class="metrics-header">
+    <h1>LLM Evaluation Metrics</h1>
+    <div class="cap">Automated checks of the Overview-tab LLM commentary across all
+    sequences. No human review required — every check compares the model's output
+    against the structured summary that was sent to it.</div>
+  </div>
+
+  <div class="overview-card metrics-card">
+    <div class="card-title">Schema Validity</div>
+    <p class="card-explainer">Did each LLM output parse as valid JSON with the expected structure (a summary string plus a list of highlights, each with text and severity)? The build's validator drops malformed entries before rendering, so 100% confirms the validator is working — anything lower would mean the model produced output the dashboard couldn't render.</p>
+    <div class="big-stat"><span class="num">100%</span>
+      <span class="lbl">aggregate pass rate</span></div>
+    <table class="metrics-table">
+      <tr><th>Sequence</th><th>Result</th><th>Issues</th></tr>
+      <tr><td>makeCoffee1</td><td><span class="ok">PASS</span></td><td class="examples">—</td></tr>
+<tr><td>putAppleBowl1</td><td><span class="ok">PASS</span></td><td class="examples">—</td></tr>
+<tr><td>putPearDrawer1</td><td><span class="ok">PASS</span></td><td class="examples">—</td></tr>
+    </table>
+  </div>
+
+  <div class="overview-card metrics-card">
+    <div class="card-title">Reference Validity</div>
+    <p class="card-explainer">Every highlight references concrete things from the input — specific frame IDs and object IDs. This metric checks: for each citation, does the cited entity actually exist in the structured summary that was sent to the LLM? Invalid references would mean the model invented frames or objects that don't exist in the data. The build's validator already filters references on the way out, so a high rate confirms the safety net is working.</p>
+    <div class="big-stat"><span class="num">100%</span>
+      <span class="lbl">aggregate valid-reference rate</span></div>
+    <table class="metrics-table">
+      <tr><th>Sequence</th><th>Rate</th><th>Valid / Total</th><th>Failing examples</th></tr>
+      <tr><td>makeCoffee1</td><td class="rate" data-tier="good">100%</td><td class="num-col">0 / 0</td><td class="examples">—</td></tr>
+<tr><td>putAppleBowl1</td><td class="rate" data-tier="good">100%</td><td class="num-col">0 / 0</td><td class="examples">—</td></tr>
+<tr><td>putPearDrawer1</td><td class="rate" data-tier="good">100%</td><td class="num-col">0 / 0</td><td class="examples">—</td></tr>
+    </table>
+  </div>
+
+  <div class="overview-card metrics-card">
+    <div class="card-title">Numeric Grounding</div>
+    <p class="card-explainer">When the LLM cites a specific number — a tracker confidence value, a frame count, a percentage — does that number actually appear in the input data? This catches hallucinated specifics: numbers that sound plausible but the model made up. The check rounds floats to common precisions before matching, so a value of 0.31 still counts as grounded if the input has 0.314. A low score here means the model is inventing numerical details.</p>
+    <div class="big-stat"><span class="num">100%</span>
+      <span class="lbl">aggregate grounded-number rate</span></div>
+    <table class="metrics-table">
+      <tr><th>Sequence</th><th>Rate</th><th>Grounded / Total</th><th>Failing examples</th></tr>
+      <tr><td>makeCoffee1</td><td class="rate" data-tier="good">100%</td><td class="num-col">9 / 9</td><td class="examples">—</td></tr>
+<tr><td>putAppleBowl1</td><td class="rate" data-tier="good">100%</td><td class="num-col">8 / 8</td><td class="examples">—</td></tr>
+<tr><td>putPearDrawer1</td><td class="rate" data-tier="good">100%</td><td class="num-col">0 / 0</td><td class="examples">—</td></tr>
+    </table>
+  </div>
+  <div class="metrics-foot">
+    <div class="gen">Generated 2026-06-24T06:05:41Z · prompt overview_v2.5</div>
+    Limitations: these three metrics measure well-formedness and grounding only. They do not measure whether the LLM caught the most important findings (coverage) or whether the commentary was useful to a reader — those require human review. For a higher-stakes evaluation, complement these automated metrics with a small Likert-rated user study.
+  </div>
+</div>
+</body>
+</html>
